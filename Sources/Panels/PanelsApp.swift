@@ -11,6 +11,9 @@ struct PanelsApp: App {
             ReaderView(model: model)
                 .background(WindowBackgroundConfigurator())
         }
+        // A two-page spread is about 1.4:1. The old default of 900x512 was
+        // nearly 1.9:1, which letterboxed a quarter of the window into black.
+        .defaultSize(width: 1280, height: 900)
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             // A reader has nothing to create.

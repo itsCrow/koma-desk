@@ -33,8 +33,9 @@ final class SpreadScrollView: NSScrollView {
         contentView = clip
         documentView = pageView
 
-        drawsBackground = true
-        backgroundColor = .black
+        // The strip paints the black behind everything. A panel drawing its own
+        // would cover the neighbour it overlaps.
+        drawsBackground = false
         hasVerticalScroller = false
         hasHorizontalScroller = false
         allowsMagnification = true
@@ -48,6 +49,15 @@ final class SpreadScrollView: NSScrollView {
     /// a page would hand it first responder and the arrow keys would scroll it
     /// instead of turning the page.
     override var acceptsFirstResponder: Bool { false }
+
+    /// How much width the page actually takes up on screen right now, which is
+    /// what the strip spaces panels by. Spacing by the window's width instead
+    /// would put a letterbox bar from each panel either side of the gutter.
+    var displayedContentWidth: CGFloat {
+        guard bounds.width > 0 else { return 0 }
+        let onScreen = pageView.frame.width * magnification
+        return min(max(onScreen, 1), bounds.width)
+    }
 
     /// Whether this panel already shows the given spread, pages and all. The
     /// page check matters because flipping reading direction reverses them
@@ -91,6 +101,7 @@ final class SpreadScrollView: NSScrollView {
             magnification = fit
         }
         hasFitted = true
+        swipeCoordinator?.contentWidthChanged()
     }
 
     // MARK: - Swipe
@@ -134,6 +145,8 @@ final class SpreadScrollView: NSScrollView {
 
     override func magnify(with event: NSEvent) {
         super.magnify(with: event)
+        // Zooming changes how wide the page sits, and so where its neighbours go.
+        swipeCoordinator?.contentWidthChanged()
         onInteraction?()
     }
 
@@ -200,13 +213,12 @@ private final class SpreadDocumentView: NSView {
     override func layout() {
         super.layout()
         let height = bounds.height
+        let widths = Self.scaledWidths(of: images, at: height)
+        let gutter = Self.gutter(between: widths)
         var x: CGFloat = 0
-        for (view, image) in zip(imageViews, images) {
-            let size = image.pixelSize
-            guard size.height > 0 else { continue }
-            let width = size.width * (height / size.height)
+        for (view, width) in zip(imageViews, widths) {
             view.frame = NSRect(x: x, y: 0, width: width, height: height)
-            x += width
+            x += width + gutter
         }
     }
 
@@ -215,8 +227,24 @@ private final class SpreadDocumentView: NSView {
     static func naturalSize(of images: [NSImage]) -> NSSize {
         let sizes = images.map(\.pixelSize).filter { $0.width > 0 && $0.height > 0 }
         guard let height = sizes.map(\.height).max() else { return .zero }
-        let width = sizes.reduce(0) { $0 + $1.width * (height / $1.height) }
-        return NSSize(width: width, height: height)
+        let widths = scaledWidths(of: images, at: height)
+        let gutters = gutter(between: widths) * CGFloat(max(widths.count - 1, 0))
+        return NSSize(width: widths.reduce(0, +) + gutters, height: height)
+    }
+
+    private static func scaledWidths(of images: [NSImage], at height: CGFloat) -> [CGFloat] {
+        images.map { image in
+            let size = image.pixelSize
+            guard size.height > 0 else { return 0 }
+            return size.width * (height / size.height)
+        }
+    }
+
+    /// The spine between facing pages. Measured against the page rather than the
+    /// window, so it keeps its proportions at every zoom level.
+    private static func gutter(between widths: [CGFloat]) -> CGFloat {
+        guard widths.count > 1, let first = widths.first else { return 0 }
+        return first * 0.025
     }
 }
 

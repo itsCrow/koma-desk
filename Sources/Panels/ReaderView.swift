@@ -80,7 +80,6 @@ struct ReaderView: View {
             direction: model.direction,
             onInteraction: revealChrome
         )
-        .padding(8)
     }
 
     // MARK: - Chrome

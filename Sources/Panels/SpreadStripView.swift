@@ -31,8 +31,9 @@ struct SpreadStrip: NSViewRepresentable {
 final class SpreadStripView: NSView {
     var onInteraction: (() -> Void)?
 
-    /// Black space between spreads, so a page edge is visible arriving.
-    private static let gutter: CGFloat = 12
+    /// Black space between one spread and the next. This is the *only* black
+    /// that should show during a swipe.
+    private static let gutter: CGFloat = 14
     private static let slideDuration: CFTimeInterval = 0.22
 
     private var centrePanel: SpreadScrollView?
@@ -48,6 +49,9 @@ final class SpreadStripView: NSView {
     private weak var model: ReaderModel?
     private var builtDirection: ReadingDirection?
     private var isSwiping = false
+    /// Repositioning resizes panels, which re-fits them, which reports a new
+    /// content width — straight back here. Breaks that cycle.
+    private var isPositioning = false
 
     private var displayLink: CADisplayLink?
     private var slideFrom: CGFloat = 0
@@ -139,6 +143,7 @@ final class SpreadStripView: NSView {
             rightPanel = neighbour(of: centre, on: .right, in: model)
                 .flatMap { makePanel(forSpreadAt: $0, in: model) }
         }
+        raiseCentrePanel()
         positionPanels()
     }
 
@@ -194,8 +199,28 @@ final class SpreadStripView: NSView {
         positionPanels()
     }
 
+    /// Panels sit a page's width apart, not a window's width apart — otherwise
+    /// the gap between spreads is the gutter plus two letterbox bars. Panels
+    /// still span the whole strip so a zoomed page can use the full window;
+    /// they simply overlap, which is harmless now they're transparent.
+    private var step: CGFloat {
+        let content = centrePanel?.displayedContentWidth ?? 0
+        return (content > 0 ? content : bounds.width) + Self.gutter
+    }
+
     private func positionPanels() {
-        let step = bounds.width + Self.gutter
+        guard !isPositioning else { return }
+        isPositioning = true
+        defer { isPositioning = false }
+
+        // Neighbours sit only a gutter away now, so in a window wider than the
+        // spread they would peek in at both edges. They belong on screen only
+        // while the strip is actually moving.
+        let moving = isSwiping || isAnimating
+        leftPanel?.isHidden = !moving
+        rightPanel?.isHidden = !moving
+
+        let step = self.step
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         centrePanel?.frame = frame(forSlot: 0, step: step)
@@ -208,6 +233,19 @@ final class SpreadStripView: NSView {
         NSRect(x: (slot + offset) * step, y: 0, width: bounds.width, height: bounds.height)
     }
 
+    /// Zooming changes how much width the page occupies, so the spacing has to
+    /// be recomputed — otherwise the neighbours drift away from the gutter.
+    func contentWidthChanged() {
+        positionPanels()
+    }
+
+    /// Panels overlap now, so the centre one has to stay in front or a
+    /// transparent neighbour lying over it would swallow the scroll events.
+    private func raiseCentrePanel() {
+        guard let centre = centrePanel else { return }
+        addSubview(centre, positioned: .above, relativeTo: nil)
+    }
+
     // MARK: - Swipe
 
     /// Called by a panel that has run out of room to pan. Returns true when the
@@ -218,6 +256,7 @@ final class SpreadStripView: NSView {
         guard leftPanel != nil || rightPanel != nil else { return false }
 
         isSwiping = true
+        positionPanels()
         // Clamped to zero on a side with nothing to show, which is what gives
         // the damped resist at the first and last page.
         event.trackSwipeEvent(
@@ -233,6 +272,7 @@ final class SpreadStripView: NSView {
 
             guard isComplete else { return }
             self.isSwiping = false
+            defer { self.positionPanels() }
             if amount > 0.5 {
                 self.commit(revealing: .left)
             } else if amount < -0.5 {
@@ -311,6 +351,7 @@ final class SpreadStripView: NSView {
         let link = displayLink(target: self, selector: #selector(stepSlide))
         link.add(to: .main, forMode: .common)
         displayLink = link
+        positionPanels()
     }
 
     @objc private func stepSlide() {
@@ -334,5 +375,6 @@ final class SpreadStripView: NSView {
         let completion = slideCompletion
         slideCompletion = nil
         completion?()
+        positionPanels()
     }
 }
