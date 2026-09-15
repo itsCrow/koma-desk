@@ -3,8 +3,8 @@ import AppKit
 
 struct ReaderView: View {
     @Bindable var model: ReaderModel
-    @State private var chromeVisible = true
-    @State private var chromeTimer: Task<Void, Never>?
+    /// The controls panel is up. Pages dim behind it.
+    @State private var showsControls = false
     @State private var isDropTargeted = false
     @FocusState private var focused: Bool
 
@@ -30,18 +30,19 @@ struct ReaderView: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
-        .onAppear { focused = true; scheduleChromeHide() }
-        .onContinuousHover { phase in
-            if case .active = phase { revealChrome() }
+        .onAppear { focused = true }
+        .onKeyPress(.leftArrow) { model.pressedLeftArrow(); return .handled }
+        .onKeyPress(.rightArrow) { model.pressedRightArrow(); return .handled }
+        .onKeyPress(.home) { model.goToStart(); return .handled }
+        .onKeyPress(.end) { model.goToEnd(); return .handled }
+        .onKeyPress(.escape) {
+            guard showsControls else { return .ignored }
+            setControls(visible: false)
+            return .handled
         }
-        .onKeyPress(.leftArrow) { model.pressedLeftArrow(); revealChrome(); return .handled }
-        .onKeyPress(.rightArrow) { model.pressedRightArrow(); revealChrome(); return .handled }
-        .onKeyPress(.home) { model.goToStart(); revealChrome(); return .handled }
-        .onKeyPress(.end) { model.goToEnd(); revealChrome(); return .handled }
         .onKeyPress(keys: [.space], phases: .down) { press in
             // Space pages forward through the book; shift-space steps back.
             press.modifiers.contains(.shift) ? model.goBack() : model.goForward()
-            revealChrome()
             return .handled
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -78,88 +79,46 @@ struct ReaderView: View {
             model: model,
             spreadIndex: model.spreadIndex,
             direction: model.direction,
-            onInteraction: revealChrome
+            // Swiping or zooming the pages means the reader is reading again.
+            onInteraction: { setControls(visible: false) },
+            onTap: { setControls(visible: !showsControls) }
         )
     }
 
-    // MARK: - Chrome
+    // MARK: - Controls
 
     @ViewBuilder
     private var overlays: some View {
-        VStack {
+        ZStack(alignment: .bottom) {
+            if showsControls, model.hasComic {
+                // Dims the pages, and a click on them puts the panel away.
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { setControls(visible: false) }
+                    .transition(.opacity)
+
+                ReaderControlsPanel(model: model)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .overlay(alignment: .top) {
             if let warning = model.warning {
                 WarningBanner(text: warning)
                     .padding(.top, 12)
             }
-            Spacer()
-            if model.hasComic {
-                HStack(spacing: 16) {
-                    NavigationArrow(systemName: "chevron.left", enabled: leftArrowEnabled) {
-                        model.pressedLeftArrow()
-                    }
-                    Text(model.positionLabel)
-                        .font(.system(.callout, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.white)
-                        .frame(minWidth: 110)
-                    NavigationArrow(systemName: "chevron.right", enabled: rightArrowEnabled) {
-                        model.pressedRightArrow()
-                    }
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-                .background(.black.opacity(0.65), in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.12)))
-                .padding(.bottom, 20)
-                .opacity(chromeVisible ? 1 : 0)
-                .animation(.easeInOut(duration: 0.25), value: chromeVisible)
-            }
         }
-        .allowsHitTesting(chromeVisible)
     }
 
-    /// The left arrow advances in manga order and retreats in Western order, so
-    /// which arrow is available flips with the reading direction.
-    private var leftArrowEnabled: Bool {
-        model.direction == .rightToLeft ? model.canGoForward : model.canGoBack
-    }
-
-    private var rightArrowEnabled: Bool {
-        model.direction == .rightToLeft ? model.canGoBack : model.canGoForward
-    }
-
-    private func revealChrome() {
-        chromeVisible = true
-        scheduleChromeHide()
-    }
-
-    private func scheduleChromeHide() {
-        chromeTimer?.cancel()
-        chromeTimer = Task {
-            try? await Task.sleep(for: .seconds(2.5))
-            guard !Task.isCancelled else { return }
-            chromeVisible = false
-        }
+    private func setControls(visible: Bool) {
+        guard visible != showsControls else { return }
+        withAnimation(.easeOut(duration: 0.22)) { showsControls = visible }
     }
 }
 
 // MARK: - Components
-
-private struct NavigationArrow: View {
-    let systemName: String
-    let enabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(enabled ? .white : .white.opacity(0.25))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-    }
-}
 
 private struct WarningBanner: View {
     let text: String

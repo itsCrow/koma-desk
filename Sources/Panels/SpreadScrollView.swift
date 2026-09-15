@@ -112,6 +112,26 @@ final class SpreadScrollView: NSScrollView {
         if magnification <= fit + 0.0001 { isFitted = true }
     }
 
+    // MARK: - Click
+
+    private var mouseDownPoint: NSPoint?
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownPoint = event.locationInWindow
+        super.mouseDown(with: event)
+    }
+
+    /// A click that didn't move is a tap. Anything that travelled was the
+    /// start of something else and is left alone.
+    override func mouseUp(with event: NSEvent) {
+        defer { mouseDownPoint = nil }
+        super.mouseUp(with: event)
+        guard let start = mouseDownPoint, event.clickCount == 1 else { return }
+        let end = event.locationInWindow
+        guard hypot(end.x - start.x, end.y - start.y) < 4 else { return }
+        swipeCoordinator?.onTap?()
+    }
+
     // MARK: - Swipe
 
     /// Required for the full gesture stream that `trackSwipeEvent` needs.

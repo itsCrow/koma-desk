@@ -10,18 +10,22 @@ struct SpreadStrip: NSViewRepresentable {
     /// rather than relying on the body happening to observe them elsewhere.
     let spreadIndex: Int
     let direction: ReadingDirection
-    /// Called as the reader pans, zooms or swipes, so the chrome reappears.
+    /// Called as the reader pans, zooms or swipes.
     let onInteraction: () -> Void
+    /// A plain click on a page — not a drag, not a swipe.
+    let onTap: () -> Void
 
     func makeNSView(context: Context) -> SpreadStripView {
         let strip = SpreadStripView()
         strip.onInteraction = onInteraction
+        strip.onTap = onTap
         strip.synchronise(with: model)
         return strip
     }
 
     func updateNSView(_ strip: SpreadStripView, context: Context) {
         strip.onInteraction = onInteraction
+        strip.onTap = onTap
         strip.synchronise(with: model)
     }
 }
@@ -30,6 +34,7 @@ struct SpreadStrip: NSViewRepresentable {
 
 final class SpreadStripView: NSView {
     var onInteraction: (() -> Void)?
+    var onTap: (() -> Void)?
 
     /// Black space between one spread and the next. This is the *only* black
     /// that should show during a swipe.
