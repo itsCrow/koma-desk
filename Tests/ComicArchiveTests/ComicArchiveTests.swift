@@ -35,6 +35,89 @@ struct PageSortTests {
     }
 }
 
+// MARK: - Spread pairing
+
+@Suite("Spread pairing")
+struct SpreadTests {
+    /// Convenience: no page is a double-page scan.
+    static func narrow(_ count: Int) -> [Bool] { Array(repeating: false, count: count) }
+
+    @Test("The cover stands alone, then pages pair up")
+    func coverAlone() {
+        let spreads = buildSpreads(pageCount: 5, isWide: Self.narrow(5))
+        #expect(spreads.map(\.pageIndices) == [[0], [1, 2], [3, 4]])
+    }
+
+    @Test("A trailing odd page finishes alone")
+    func trailingOdd() {
+        let spreads = buildSpreads(pageCount: 4, isWide: Self.narrow(4))
+        #expect(spreads.map(\.pageIndices) == [[0], [1, 2], [3]])
+    }
+
+    @Test("A double-page scan gets the window to itself")
+    func wideAlone() {
+        // Page index 3 is a merged centrefold.
+        var wide = Self.narrow(6)
+        wide[3] = true
+        let spreads = buildSpreads(pageCount: 6, isWide: wide)
+        // Index 2 can't pair with the wide page, so it falls solo too.
+        #expect(spreads.map(\.pageIndices) == [[0], [1, 2], [3], [4, 5]])
+    }
+
+    @Test("The page before a double-page scan is not paired with it")
+    func pageBeforeWide() {
+        var wide = Self.narrow(5)
+        wide[2] = true
+        let spreads = buildSpreads(pageCount: 5, isWide: wide)
+        #expect(spreads.map(\.pageIndices) == [[0], [1], [2], [3, 4]])
+    }
+
+    @Test("Consecutive double-page scans each stand alone")
+    func consecutiveWide() {
+        var wide = Self.narrow(4)
+        wide[1] = true
+        wide[2] = true
+        let spreads = buildSpreads(pageCount: 4, isWide: wide)
+        #expect(spreads.map(\.pageIndices) == [[0], [1], [2], [3]])
+    }
+
+    @Test("A one-page comic is a single spread, and an empty one has none")
+    func degenerate() {
+        #expect(buildSpreads(pageCount: 1, isWide: [false]).map(\.pageIndices) == [[0]])
+        #expect(buildSpreads(pageCount: 0, isWide: []).isEmpty)
+    }
+
+    @Test("Mismatched isWide array doesn't trip the bounds checks")
+    func shortFlags() {
+        // Defensive: the flags come from a separate scan and could lag behind.
+        let spreads = buildSpreads(pageCount: 4, isWide: [])
+        #expect(spreads.map(\.pageIndices) == [[0], [1, 2], [3]])
+    }
+
+    @Test("Real comic layout: Berserk v01, 219 pages with 9 merged centrefolds")
+    func berserkVolumeOne() {
+        // Measured from ~/Downloads/Berserk v01 (2003) (Digital) (danke-Empire).cbz:
+        // 219 pages, nine 3620x2560 centrefolds at these indices.
+        var wide = Self.narrow(219)
+        for index in [8, 21, 58, 83, 94, 127, 150, 163, 180] { wide[index] = true }
+
+        let spreads = buildSpreads(pageCount: 219, isWide: wide)
+
+        #expect(spreads.count == 115)
+        #expect(spreads[0].pageIndices == [0])
+        // Page index 7 is orphaned by the centrefold at 8.
+        #expect(spreads[4].pageIndices == [7])
+        #expect(spreads[5].pageIndices == [8])
+        #expect(spreads.last?.pageIndices == [217, 218])
+        // Every page appears exactly once, in order — no page lost or repeated.
+        #expect(spreads.flatMap(\.pageIndices) == Array(0..<219))
+        // Each centrefold is alone.
+        for index in [8, 21, 58, 83, 94, 127, 150, 163, 180] {
+            #expect(spreads.contains { $0.pageIndices == [index] })
+        }
+    }
+}
+
 // MARK: - Entry filtering
 
 @Suite("Archive entry sanitising")
@@ -72,6 +155,72 @@ struct SanitizeTests {
     @Test("Normalises Windows separators")
     func windowsSeparators() {
         #expect(ComicArchive.sanitize("Chapter 1\\003.jpg") == "Chapter 1/003.jpg")
+    }
+}
+
+// MARK: - Cache pruning
+
+@Suite("Cache pruning")
+struct PruneTests {
+    /// Builds a cache directory of roughly `kilobytes`, stamped as read at `age`
+    /// seconds ago.
+    static func makeExtraction(
+        _ name: String, kilobytes: Int, agedSeconds: Int, in root: URL
+    ) throws -> URL {
+        let directory = root.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(repeating: 0, count: kilobytes * 1024)
+            .write(to: directory.appendingPathComponent("page.bin"))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-Double(agedSeconds))],
+            ofItemAtPath: directory.path
+        )
+        return directory
+    }
+
+    @Test("Least recently read comics are dropped first")
+    func dropsOldest() throws {
+        let root = try OpenTests.makeScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fresh = try Self.makeExtraction("fresh", kilobytes: 100, agedSeconds: 10, in: root)
+        let middle = try Self.makeExtraction("middle", kilobytes: 100, agedSeconds: 100, in: root)
+        let stale = try Self.makeExtraction("stale", kilobytes: 100, agedSeconds: 1000, in: root)
+
+        // Room for roughly two of the three.
+        ComicArchive.pruneCache(in: root, budget: 250 * 1024)
+
+        #expect(FileManager.default.fileExists(atPath: fresh.path))
+        #expect(FileManager.default.fileExists(atPath: middle.path))
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+    }
+
+    @Test("A comic under the budget is never touched")
+    func keepsEverythingUnderBudget() throws {
+        let root = try OpenTests.makeScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let only = try Self.makeExtraction("only", kilobytes: 100, agedSeconds: 10, in: root)
+        ComicArchive.pruneCache(in: root, budget: 4 << 20)
+        #expect(FileManager.default.fileExists(atPath: only.path))
+    }
+
+    @Test("The most recent comic survives even if it alone exceeds the budget")
+    func keepsNewestRegardless() throws {
+        let root = try OpenTests.makeScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Otherwise the comic you just opened could be deleted out from under you.
+        let huge = try Self.makeExtraction("huge", kilobytes: 500, agedSeconds: 1, in: root)
+        ComicArchive.pruneCache(in: root, budget: 1024)
+        #expect(FileManager.default.fileExists(atPath: huge.path))
+    }
+
+    @Test("A missing cache directory is not an error")
+    func missingRoot() {
+        let absent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-absent-\(UUID().uuidString)")
+        ComicArchive.pruneCache(in: absent, budget: 1024)
     }
 }
 
@@ -240,6 +389,28 @@ struct OpenTests {
         } catch is ArchiveError {
             // Acceptable: nothing was recoverable.
         }
+    }
+
+    @Test("A zero-byte entry is skipped without truncating the comic")
+    func emptyEntry() throws {
+        let scratch = try Self.makeScratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let staging = scratch.appendingPathComponent("book", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try Self.writePNG(width: 100, height: 200, to: staging.appendingPathComponent("1.png"))
+        // A stray empty placeholder between two real pages. This must not end
+        // the extraction — doing so would silently drop page 3 and cry damage.
+        try Data().write(to: staging.appendingPathComponent("2.png"))
+        try Self.writePNG(width: 120, height: 200, to: staging.appendingPathComponent("3.png"))
+
+        let cbz = scratch.appendingPathComponent("Holey.cbz")
+        #expect(try Self.run("/usr/bin/zip", ["-q", "-r", cbz.path, "."], in: staging) == 0)
+
+        let comic = try ComicArchive.open(cbz)
+        #expect(comic.pageCount == 2)
+        #expect(comic.warning == nil)
+        #expect(comic.pages.map(\.lastPathComponent) == ["1.png", "3.png"])
     }
 
     @Test("Reads a real .cbr when one is supplied via PANELS_TEST_CBR")

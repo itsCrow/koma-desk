@@ -1,10 +1,12 @@
 #!/bin/bash
-# Assembles a double-clickable Panels.app from the SwiftPM build product.
+# Assembles a double-clickable PanelsMVP.app from the SwiftPM build product.
+# Named PanelsMVP so it sits alongside the commercial Panels in /Applications
+# rather than replacing it.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP="build/Panels.app"
+APP="build/PanelsMVP.app"
 CONTENTS="$APP/Contents"
 
 echo "==> Building release binary"
@@ -14,7 +16,7 @@ echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
-cp ".build/release/Panels" "$CONTENTS/MacOS/Panels"
+cp ".build/release/Panels" "$CONTENTS/MacOS/PanelsMVP"
 cp "Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "Resources/Panels.icns" "$CONTENTS/Resources/Panels.icns"
 printf 'APPL????' > "$CONTENTS/PkgInfo"

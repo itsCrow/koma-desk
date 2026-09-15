@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import ImageIO
 import Observation
 import UniformTypeIdentifiers
 import ComicArchive
@@ -22,14 +21,6 @@ enum ReadingDirection: String, CaseIterable {
     var flipped: ReadingDirection {
         self == .rightToLeft ? .leftToRight : .rightToLeft
     }
-}
-
-/// One or two facing pages, always stored in ascending page order regardless of
-/// reading direction. Direction is applied at render time only — reordering the
-/// underlying pages would desynchronise the page counter and saved position.
-struct Spread: Equatable {
-    /// Indices into `ReaderModel.pages`.
-    let pageIndices: [Int]
 }
 
 @Observable
@@ -103,13 +94,18 @@ final class ReaderModel {
         warning = nil
 
         Task {
+            // The page scan reads metadata for every page in the comic, so it
+            // rides along with extraction rather than landing on the main actor.
             let result = await Task.detached(priority: .userInitiated) {
-                Result { try ComicArchive.open(url) }
+                Result { () -> (ComicArchive, [Bool]) in
+                    let comic = try ComicArchive.open(url)
+                    return (comic, comic.pages.map(isWidePage))
+                }
             }.value
 
             switch result {
-            case .success(let comic):
-                apply(comic)
+            case .success(let (comic, wideFlags)):
+                apply(comic, wideFlags: wideFlags)
             case .failure(let error):
                 isLoading = false
                 errorMessage = Self.describe(error, for: url)
@@ -128,13 +124,13 @@ final class ReaderModel {
         return headline
     }
 
-    private func apply(_ comic: ComicArchive) {
+    private func apply(_ comic: ComicArchive, wideFlags scanned: [Bool]) {
         cache.removeAll()
         source = comic.source
         title = comic.title
         pages = comic.pages
-        wideFlags = comic.pages.map(Self.isWide)
-        spreads = Self.buildSpreads(pageCount: pages.count, isWide: wideFlags)
+        wideFlags = scanned
+        spreads = buildSpreads(pageCount: pages.count, isWide: wideFlags)
         warning = comic.warning?.message
         isLoading = false
 
@@ -156,38 +152,6 @@ final class ReaderModel {
     }
 
     // MARK: - Spreads
-
-    /// Reads pixel dimensions from image metadata without decoding the image.
-    private static func isWide(_ url: URL) -> Bool {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Double,
-              let height = properties[kCGImagePropertyPixelHeight] as? Double,
-              height > 0
-        else { return false }
-        return width > height
-    }
-
-    /// Pairs pages the way a physical comic falls: the cover stands alone, then
-    /// pages face each other two at a time. A page wider than it is tall is a
-    /// double-page scan and gets the window to itself.
-    static func buildSpreads(pageCount: Int, isWide: [Bool]) -> [Spread] {
-        guard pageCount > 0 else { return [] }
-        var spreads: [Spread] = [Spread(pageIndices: [0])]
-        var index = 1
-        while index < pageCount {
-            let currentIsWide = isWide.indices.contains(index) && isWide[index]
-            let nextIsWide = isWide.indices.contains(index + 1) && isWide[index + 1]
-            if !currentIsWide, index + 1 < pageCount, !nextIsWide {
-                spreads.append(Spread(pageIndices: [index, index + 1]))
-                index += 2
-            } else {
-                spreads.append(Spread(pageIndices: [index]))
-                index += 1
-            }
-        }
-        return spreads
-    }
 
     var currentSpread: Spread? {
         spreads.indices.contains(spreadIndex) ? spreads[spreadIndex] : nil

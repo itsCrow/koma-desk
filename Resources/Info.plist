@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Panels</string>
+	<string>Panels MVP</string>
 	<key>CFBundleDisplayName</key>
-	<string>Panels</string>
+	<string>Panels MVP</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.mida.Panels</string>
+	<string>com.mida.PanelsMVP</string>
 	<key>CFBundleExecutable</key>
-	<string>Panels</string>
+	<string>PanelsMVP</string>
 	<key>CFBundleIconFile</key>
 	<string>Panels</string>
 	<key>CFBundlePackageType</key>

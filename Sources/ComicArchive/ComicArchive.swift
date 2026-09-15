@@ -157,7 +157,9 @@ extension ComicArchive {
 
             let destination = directory.appendingPathComponent(relative)
             do {
-                try writeEntry(handle, to: destination, buffer: &buffer)
+                // An entry that holds no bytes is a stray placeholder, not
+                // damage — skip it and keep reading the rest of the comic.
+                guard try writeEntry(handle, to: destination, buffer: &buffer) else { continue }
             } catch let failure as EntryFailure {
                 // Partial page — drop it and stop; everything before it stands.
                 try? FileManager.default.removeItem(at: destination)
@@ -172,11 +174,13 @@ extension ComicArchive {
 
     private struct EntryFailure: Error { let detail: String }
 
+    /// Extracts one entry to disk. Returns false when the entry held no data,
+    /// which the caller skips; throws only when the archive itself went wrong.
     private static func writeEntry(
         _ handle: OpaquePointer,
         to destination: URL,
         buffer: inout [UInt8]
-    ) throws {
+    ) throws -> Bool {
         var contents = Data()
         while true {
             let read = buffer.withUnsafeMutableBytes { raw -> Int in
@@ -186,7 +190,7 @@ extension ComicArchive {
             if read < 0 { throw EntryFailure(detail: errorMessage(handle)) }
             contents.append(contentsOf: buffer[0..<read])
         }
-        guard !contents.isEmpty else { throw EntryFailure(detail: "Empty page entry.") }
+        guard !contents.isEmpty else { return false }
 
         let parent = destination.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
@@ -195,6 +199,7 @@ extension ComicArchive {
         } catch {
             throw EntryFailure(detail: error.localizedDescription)
         }
+        return true
     }
 
     private static func entryPath(_ entry: OpaquePointer) -> String? {
@@ -268,6 +273,11 @@ extension ComicArchive {
         guard pages.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else {
             return nil
         }
+        // Counts as a read, so pruning measures least-recently-*used* rather
+        // than least-recently-extracted.
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date()], ofItemAtPath: directory.path
+        )
         return ComicArchive(
             source: source,
             pages: pages,

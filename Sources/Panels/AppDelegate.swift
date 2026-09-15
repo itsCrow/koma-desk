@@ -1,4 +1,5 @@
 import AppKit
+import ComicArchive
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -6,6 +7,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // from inside the .app bundle, which otherwise leaves it agent-like.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+
+        // Every comic read leaves its extracted pages behind. Trim the oldest
+        // ones at launch, while nothing is open and nothing can be in use.
+        Task.detached(priority: .background) {
+            ComicArchive.pruneCache()
+        }
     }
 
     /// Double-clicking a .cbr in Finder, or dropping one on the Dock icon.
