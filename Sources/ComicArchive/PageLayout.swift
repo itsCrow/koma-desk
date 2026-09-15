@@ -13,19 +13,42 @@ public struct Spread: Equatable, Sendable {
     }
 }
 
-/// Whether a page is a double-page scan, which should be shown on its own.
-///
-/// Reads pixel dimensions from the image's metadata rather than decoding it, so
-/// scanning a whole comic stays cheap. Scanlation releases routinely ship the
-/// two halves of a centrefold pre-merged into one landscape image.
-public func isWidePage(_ url: URL) -> Bool {
+/// A page's pixel dimensions, read from the image's metadata rather than by
+/// decoding it, so measuring a whole comic stays cheap.
+public func pagePixelSize(_ url: URL) -> CGSize? {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
           let width = properties[kCGImagePropertyPixelWidth] as? Double,
           let height = properties[kCGImagePropertyPixelHeight] as? Double,
-          height > 0
-    else { return false }
-    return width > height
+          width > 0, height > 0
+    else { return nil }
+    return CGSize(width: width, height: height)
+}
+
+/// Whether a page is a double-page scan, which should be shown on its own.
+/// Scanlation releases routinely ship the two halves of a centrefold pre-merged
+/// into one landscape image.
+public func isWidePage(_ size: CGSize?) -> Bool {
+    guard let size else { return false }
+    return size.width > size.height
+}
+
+/// The width-to-height ratio of a two-page spread of this comic, or nil when no
+/// page could be measured. The reader shapes its window to this so a spread
+/// fills it edge to edge.
+///
+/// Built on the *median* single-page shape, so one odd scan — a fold-out, a
+/// cropped cover — can't skew the whole book. A comic made only of
+/// double-width scans is already spread-shaped and is used as it is.
+public func spreadAspectRatio(pageSizes: [CGSize?]) -> CGFloat? {
+    let measured = pageSizes.compactMap { $0 }.filter { $0.width > 0 && $0.height > 0 }
+    guard !measured.isEmpty else { return nil }
+    let singles = measured.filter { !isWidePage($0) }
+    let spreads = singles.isEmpty
+        ? measured.map { $0.width / $0.height }
+        : singles.map { 2 * $0.width / $0.height }
+    let sorted = spreads.sorted()
+    return sorted[sorted.count / 2]
 }
 
 /// Pairs pages the way a physical comic falls: the cover stands alone, then

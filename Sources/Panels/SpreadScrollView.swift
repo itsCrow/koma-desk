@@ -18,10 +18,11 @@ final class SpreadScrollView: NSScrollView {
     weak var swipeCoordinator: SpreadStripView?
 
     private let pageView = SpreadDocumentView()
-    /// The view starts at magnification 1.0 — native pixel size — and the first
-    /// layout pass runs before there's a viewport to measure against. Until a
-    /// fit actually succeeds, the next one is unconditional.
-    private var hasFitted = false
+    /// Whether the page sits at its fitted scale — true until the reader zooms
+    /// it. Tracked outright rather than inferred from magnification, because
+    /// AppKit clamps magnification as the limits move during a window resize
+    /// and the inference misfires mid-way, leaving a page stranded half-zoomed.
+    private var isFitted = true
 
     init() {
         super.init(frame: .zero)
@@ -69,16 +70,22 @@ final class SpreadScrollView: NSScrollView {
     func show(_ images: [NSImage]) {
         guard !pageView.isShowing(images) else { return }
         pageView.show(images)
-        hasFitted = false
+        isFitted = true
+        updateMagnificationLimits(resettingToFit: true)
+    }
+
+    /// Back to the fitted scale. A page leaving the centre gets this, so that if
+    /// the reader swipes back to it, it arrives fitted like any other page.
+    func resetToFit() {
+        isFitted = true
         updateMagnificationLimits(resettingToFit: true)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
-        let wasFitted = magnification <= minMagnification + 0.0001
         super.setFrameSize(newSize)
         // Resizing the window changes what "fits", so a page left at fit stays
         // at fit rather than drifting off-scale.
-        updateMagnificationLimits(resettingToFit: wasFitted)
+        updateMagnificationLimits(resettingToFit: isFitted)
     }
 
     /// Magnification 1.0 means native pixel size, and a comic page is far larger
@@ -95,13 +102,14 @@ final class SpreadScrollView: NSScrollView {
         let fit = min(viewport.width / content.width, viewport.height / content.height)
         guard fit > 0, fit.isFinite else { return }
 
-        minMagnification = fit
+        // Max before min: raising the floor above the ceiling makes AppKit
+        // clamp in an order we don't control.
         maxMagnification = fit * 6
-        if resettingToFit || !hasFitted || magnification < fit {
+        minMagnification = fit
+        if resettingToFit || magnification < fit {
             magnification = fit
         }
-        hasFitted = true
-        swipeCoordinator?.contentWidthChanged()
+        if magnification <= fit + 0.0001 { isFitted = true }
     }
 
     // MARK: - Swipe
@@ -145,13 +153,21 @@ final class SpreadScrollView: NSScrollView {
 
     override func magnify(with event: NSEvent) {
         super.magnify(with: event)
-        // Zooming changes how wide the page sits, and so where its neighbours go.
-        swipeCoordinator?.contentWidthChanged()
-        onInteraction?()
+        noteUserZoom()
     }
 
     override func smartMagnify(with event: NSEvent) {
         super.smartMagnify(with: event)
+        noteUserZoom()
+    }
+
+    /// The reader's own zoom is the only thing that un-fits a page. It also
+    /// changes how wide the page sits, and so where its neighbours go — and
+    /// only this reports that: a re-fit caused by the strip resizing the
+    /// panel must not call back into the strip.
+    private func noteUserZoom() {
+        isFitted = magnification <= minMagnification + 0.0001
+        swipeCoordinator?.contentWidthChanged()
         onInteraction?()
     }
 }
@@ -213,23 +229,20 @@ private final class SpreadDocumentView: NSView {
     override func layout() {
         super.layout()
         let height = bounds.height
-        let widths = Self.scaledWidths(of: images, at: height)
-        let gutter = Self.gutter(between: widths)
         var x: CGFloat = 0
-        for (view, width) in zip(imageViews, widths) {
+        for (view, width) in zip(imageViews, Self.scaledWidths(of: images, at: height)) {
             view.frame = NSRect(x: x, y: 0, width: width, height: height)
-            x += width + gutter
+            x += width
         }
     }
 
     /// Facing pages are scaled to a common height so they line up the way they
-    /// would in a printed book, even when one side was scanned larger.
+    /// would in a printed book, even when one side was scanned larger. They
+    /// sit flush: the only seam between them is the pages' own margins.
     static func naturalSize(of images: [NSImage]) -> NSSize {
         let sizes = images.map(\.pixelSize).filter { $0.width > 0 && $0.height > 0 }
         guard let height = sizes.map(\.height).max() else { return .zero }
-        let widths = scaledWidths(of: images, at: height)
-        let gutters = gutter(between: widths) * CGFloat(max(widths.count - 1, 0))
-        return NSSize(width: widths.reduce(0, +) + gutters, height: height)
+        return NSSize(width: scaledWidths(of: images, at: height).reduce(0, +), height: height)
     }
 
     private static func scaledWidths(of images: [NSImage], at height: CGFloat) -> [CGFloat] {
@@ -240,12 +253,6 @@ private final class SpreadDocumentView: NSView {
         }
     }
 
-    /// The spine between facing pages. Measured against the page rather than the
-    /// window, so it keeps its proportions at every zoom level.
-    private static func gutter(between widths: [CGFloat]) -> CGFloat {
-        guard widths.count > 1, let first = widths.first else { return 0 }
-        return first * 0.025
-    }
 }
 
 private extension NSImage {

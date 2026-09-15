@@ -27,6 +27,9 @@ final class ReaderModel {
     private(set) var spreads: [Spread] = []
     private(set) var warning: String?
     private(set) var isLoading = false
+    /// Width-to-height of a two-page spread of the open comic. The window keeps
+    /// this shape, which is what lets a spread fill it with no bars either side.
+    private(set) var spreadAspect: CGFloat?
 
     var errorMessage: String?
     var spreadIndex = 0 {
@@ -89,15 +92,16 @@ final class ReaderModel {
             // The page scan reads metadata for every page in the comic, so it
             // rides along with extraction rather than landing on the main actor.
             let result = await Task.detached(priority: .userInitiated) {
-                Result { () -> (ComicArchive, [Bool]) in
+                Result { () -> (ComicArchive, [Bool], CGFloat?) in
                     let comic = try ComicArchive.open(url)
-                    return (comic, comic.pages.map(isWidePage))
+                    let sizes = comic.pages.map(pagePixelSize)
+                    return (comic, sizes.map(isWidePage), spreadAspectRatio(pageSizes: sizes))
                 }
             }.value
 
             switch result {
-            case .success(let (comic, wideFlags)):
-                apply(comic, wideFlags: wideFlags)
+            case .success(let (comic, wideFlags, aspect)):
+                apply(comic, wideFlags: wideFlags, spreadAspect: aspect)
             case .failure(let error):
                 isLoading = false
                 errorMessage = Self.describe(error, for: url)
@@ -116,12 +120,13 @@ final class ReaderModel {
         return headline
     }
 
-    private func apply(_ comic: ComicArchive, wideFlags scanned: [Bool]) {
+    private func apply(_ comic: ComicArchive, wideFlags scanned: [Bool], spreadAspect aspect: CGFloat?) {
         cache.removeAll()
         source = comic.source
         title = comic.title
         pages = comic.pages
         wideFlags = scanned
+        spreadAspect = aspect
         spreads = buildSpreads(pageCount: pages.count, isWide: wideFlags)
         warning = comic.warning?.message
         isLoading = false
@@ -140,6 +145,7 @@ final class ReaderModel {
         spreads = []
         wideFlags = []
         warning = nil
+        spreadAspect = nil
         spreadIndex = 0
     }
 

@@ -158,6 +158,47 @@ struct SanitizeTests {
     }
 }
 
+// MARK: - Spread shape
+
+@Suite("Spread aspect ratio")
+struct SpreadAspectTests {
+    static let page = CGSize(width: 1810, height: 2560)
+    static let centrefold = CGSize(width: 3620, height: 2560)
+
+    @Test("Two portrait pages side by side")
+    func twoPages() throws {
+        let ratio = try #require(spreadAspectRatio(pageSizes: [Self.page, Self.page, Self.page]))
+        #expect(abs(ratio - 2 * 1810 / 2560) < 0.0001)
+    }
+
+    @Test("A merged centrefold doesn't widen the spread; it already is one")
+    func centrefoldIgnored() throws {
+        let ratio = try #require(spreadAspectRatio(pageSizes: [Self.page, Self.centrefold, Self.page]))
+        #expect(abs(ratio - 2 * 1810 / 2560) < 0.0001)
+    }
+
+    @Test("A comic that is nothing but double-width scans keeps its own shape")
+    func allCentrefolds() throws {
+        let ratio = try #require(spreadAspectRatio(pageSizes: [Self.centrefold, Self.centrefold]))
+        #expect(abs(ratio - 3620 / 2560) < 0.0001)
+    }
+
+    @Test("One oddly cropped page can't skew the book")
+    func medianResistsOutliers() throws {
+        let narrow = CGSize(width: 900, height: 2560)
+        let ratio = try #require(spreadAspectRatio(pageSizes: [narrow, Self.page, Self.page, Self.page, Self.page]))
+        #expect(abs(ratio - 2 * 1810 / 2560) < 0.0001)
+    }
+
+    @Test("Unmeasurable pages are skipped, and no pages means no shape")
+    func degenerate() throws {
+        let ratio = try #require(spreadAspectRatio(pageSizes: [nil, Self.page, nil]))
+        #expect(abs(ratio - 2 * 1810 / 2560) < 0.0001)
+        #expect(spreadAspectRatio(pageSizes: []) == nil)
+        #expect(spreadAspectRatio(pageSizes: [nil, nil]) == nil)
+    }
+}
+
 // MARK: - Neighbouring spreads
 
 @Suite("Off-screen neighbours")

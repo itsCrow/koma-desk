@@ -49,8 +49,8 @@ final class SpreadStripView: NSView {
     private weak var model: ReaderModel?
     private var builtDirection: ReadingDirection?
     private var isSwiping = false
-    /// Repositioning resizes panels, which re-fits them, which reports a new
-    /// content width — straight back here. Breaks that cycle.
+    /// Zoom callbacks can arrive while panels are being placed. Ignore them;
+    /// the placement already uses the current widths.
     private var isPositioning = false
 
     private var displayLink: CADisplayLink?
@@ -189,6 +189,7 @@ final class SpreadStripView: NSView {
             // The panel may have been recycled away while we waited on the disk.
             guard panel.superview === self, panel.pageURLs == urls, !images.isEmpty else { return }
             panel.show(images)
+            positionPanels()
         }
     }
 
@@ -203,17 +204,12 @@ final class SpreadStripView: NSView {
     /// the gap between spreads is the gutter plus two letterbox bars. Panels
     /// still span the whole strip so a zoomed page can use the full window;
     /// they simply overlap, which is harmless now they're transparent.
-    private var step: CGFloat {
-        let content = centrePanel?.displayedContentWidth ?? 0
-        return (content > 0 ? content : bounds.width) + Self.gutter
-    }
-
     private func positionPanels() {
         guard !isPositioning else { return }
         isPositioning = true
         defer { isPositioning = false }
 
-        // Neighbours sit only a gutter away now, so in a window wider than the
+        // Neighbours sit only a gutter away, so in a window wider than the
         // spread they would peek in at both edges. They belong on screen only
         // while the strip is actually moving.
         let moving = isSwiping || isAnimating
@@ -224,21 +220,43 @@ final class SpreadStripView: NSView {
         // gets un-hidden is just a black window.
         centrePanel?.isHidden = false
 
-        let step = self.step
+        // Size first, place second. Sizing a panel re-fits its page, and the
+        // spacing below needs the fitted widths; placing only moves origins,
+        // which triggers no re-fit — so this can't chase its own tail.
+        let panels = [leftPanel, centrePanel, rightPanel].compactMap { $0 }
+        for panel in panels where panel.frame.size != bounds.size {
+            panel.setFrameSize(bounds.size)
+        }
+
+        // Panels are spaced by their pages, not by the window: each neighbour
+        // sits half its own page width plus half the centre's, plus the gutter,
+        // from the middle. That keeps the gap at exactly one gutter even
+        // between a lone cover and the full spread after it — measured by the
+        // window, the two would overlap.
+        let centreWidth = contentWidth(of: centrePanel)
+        let stepLeft = (centreWidth + contentWidth(of: leftPanel)) / 2 + Self.gutter
+        let stepRight = (centreWidth + contentWidth(of: rightPanel)) / 2 + Self.gutter
+        let shift = offset >= 0 ? offset * stepLeft : offset * stepRight
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        centrePanel?.frame = frame(forSlot: 0, step: step)
-        leftPanel?.frame = frame(forSlot: -1, step: step)
-        rightPanel?.frame = frame(forSlot: 1, step: step)
+        centrePanel?.setFrameOrigin(NSPoint(x: shift, y: 0))
+        leftPanel?.setFrameOrigin(NSPoint(x: shift - stepLeft, y: 0))
+        rightPanel?.setFrameOrigin(NSPoint(x: shift + stepRight, y: 0))
         CATransaction.commit()
     }
 
-    private func frame(forSlot slot: CGFloat, step: CGFloat) -> NSRect {
-        NSRect(x: (slot + offset) * step, y: 0, width: bounds.width, height: bounds.height)
+    /// A panel that hasn't been laid out yet has no width to report; treat it
+    /// as the centre's until it does.
+    private func contentWidth(of panel: SpreadScrollView?) -> CGFloat {
+        let width = panel?.displayedContentWidth ?? 0
+        if width > 0 { return width }
+        let centre = centrePanel?.displayedContentWidth ?? 0
+        return centre > 0 ? centre : bounds.width
     }
 
-    /// Zooming changes how much width the page occupies, so the spacing has to
-    /// be recomputed — otherwise the neighbours drift away from the gutter.
+    /// The reader zoomed a page, so it occupies a different width and its
+    /// neighbours have to move to keep the gutter.
     func contentWidthChanged() {
         positionPanels()
     }
@@ -313,6 +331,8 @@ final class SpreadStripView: NSView {
         guard let incoming = (side == .left ? leftPanel : rightPanel) else { return false }
         let outgoing = centrePanel
         centrePanel = incoming
+        // Whatever zoom the reader had on the old page stays behind with it.
+        outgoing?.resetToFit()
 
         switch side {
         case .left:
