@@ -5,6 +5,10 @@ struct ReaderView: View {
     @Bindable var model: ReaderModel
     /// The controls panel is up. Pages dim behind it.
     @State private var showsControls = false
+    /// After the panel closes on a search, the hits stay painted just long
+    /// enough to find the balloon, then fade. A page turn ends it early.
+    @State private var lingeringHighlights = false
+    @State private var lingerTask: Task<Void, Never>?
     @State private var isDropTargeted = false
     @FocusState private var focused: Bool
 
@@ -49,6 +53,10 @@ struct ReaderView: View {
         .onChange(of: model.wantsSearchFocus) { _, wants in
             if wants { setControls(visible: true) }
         }
+        .onChange(of: model.spreadIndex) {
+            // Turning the page with the panel closed means you've moved on.
+            if !showsControls { endLinger() }
+        }
         .onKeyPress(keys: [.space], phases: .down) { press in
             // Space pages forward through the book; shift-space steps back.
             press.modifiers.contains(.shift) ? model.goBack() : model.goForward()
@@ -88,7 +96,7 @@ struct ReaderView: View {
             model: model,
             spreadIndex: model.spreadIndex,
             direction: model.direction,
-            highlights: model.highlightsByPage,
+            highlights: highlightsOnPages,
             // Swiping or zooming the pages means the reader is reading again.
             onInteraction: { setControls(visible: false) },
             onTap: { setControls(visible: !showsControls) }
@@ -141,9 +149,37 @@ struct ReaderView: View {
     private func setControls(visible: Bool) {
         guard visible != showsControls else { return }
         withAnimation(.easeOut(duration: 0.22)) { showsControls = visible }
-        // The search field takes the keyboard while the panel is up; the
-        // arrow keys want it back when the panel goes.
-        if !visible { focused = true }
+        if visible {
+            endLinger()
+        } else {
+            // The search field takes the keyboard while the panel is up; the
+            // arrow keys want it back when the panel goes.
+            focused = true
+            if model.isSearching { startLinger() }
+        }
+    }
+
+    /// Search hits are painted on the pages while the panel is up with a
+    /// query, and for a moment after it closes. The search itself is kept
+    /// until cleared; only the paint is transient.
+    private var highlightsOnPages: [URL: [CGRect]] {
+        (showsControls && model.isSearching) || lingeringHighlights ? model.highlightsByPage : [:]
+    }
+
+    private func startLinger() {
+        lingerTask?.cancel()
+        lingeringHighlights = true
+        lingerTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            lingeringHighlights = false
+        }
+    }
+
+    private func endLinger() {
+        lingerTask?.cancel()
+        lingerTask = nil
+        lingeringHighlights = false
     }
 }
 

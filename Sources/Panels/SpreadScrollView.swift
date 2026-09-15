@@ -304,8 +304,45 @@ private final class SpreadDocumentView: NSView {
 /// so it scales and pans with the page for free.
 private final class HighlightOverlayView: NSView {
     /// Vision's boxes: unit rects with the origin at the image's bottom-left.
+    /// Clearing them fades the paint out rather than snapping it away.
     var boxes: [CGRect] = [] {
-        didSet { if boxes != oldValue { needsDisplay = true } }
+        didSet {
+            guard boxes != oldValue else { return }
+            if boxes.isEmpty {
+                fadeOut()
+            } else {
+                drawn = boxes
+                alphaValue = 1
+                needsDisplay = true
+            }
+        }
+    }
+
+    /// What's on screen — lags `boxes` while a fade is running.
+    private var drawn: [CGRect] = []
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func fadeOut() {
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.6
+            self.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            // Animation completions land on the main thread; the compiler
+            // just can't see it.
+            MainActor.assumeIsolated {
+                guard let self, self.boxes.isEmpty else { return }
+                self.drawn = []
+                self.needsDisplay = true
+            }
+        })
     }
 
     override var isFlipped: Bool { true }
@@ -314,9 +351,9 @@ private final class HighlightOverlayView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard !boxes.isEmpty else { return }
+        guard !drawn.isEmpty else { return }
         let size = bounds.size
-        for box in boxes {
+        for box in drawn {
             // This view is flipped; Vision's y runs the other way.
             let rect = NSRect(
                 x: box.minX * size.width,
