@@ -99,7 +99,7 @@ struct ReaderView: View {
             highlights: highlightsOnPages,
             // Swiping or zooming the pages means the reader is reading again.
             onInteraction: { setControls(visible: false) },
-            onTap: { setControls(visible: !showsControls) }
+            onTap: { focused = true; setControls(visible: !showsControls) }
         )
     }
 

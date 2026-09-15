@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import VisionKit
 
 // MARK: - Scroll view
 
@@ -74,7 +75,7 @@ final class SpreadScrollView: NSScrollView {
 
     func show(_ images: [NSImage]) {
         guard !pageView.isShowing(images) else { return }
-        pageView.show(images)
+        pageView.show(images, urls: pageURLs)
         isFitted = true
         updateMagnificationLimits(resettingToFit: true)
     }
@@ -228,6 +229,10 @@ private final class SpreadDocumentView: NSView {
     /// One per page, over its image view, drawing the search hits.
     private var highlightViews: [HighlightOverlayView] = []
     private var pendingHighlights: [[CGRect]] = []
+    /// One per page, on top: the system's Live Text, so lettering can be
+    /// selected and copied like text anywhere else on the Mac.
+    private var liveTextViews: [ImageAnalysisOverlayView] = []
+    private var analysisTasks: [Task<Void, Never>] = []
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
@@ -239,10 +244,13 @@ private final class SpreadDocumentView: NSView {
             && zip(images, candidates).allSatisfy { $0 === $1 }
     }
 
-    func show(_ images: [NSImage]) {
+    func show(_ images: [NSImage], urls: [URL] = []) {
         self.images = images
+        analysisTasks.forEach { $0.cancel() }
+        analysisTasks = []
         imageViews.forEach { $0.removeFromSuperview() }
         highlightViews.forEach { $0.removeFromSuperview() }
+        liveTextViews.forEach { $0.removeFromSuperview() }
         imageViews = images.map { image in
             let view = NSImageView()
             view.image = image
@@ -256,9 +264,31 @@ private final class SpreadDocumentView: NSView {
             addSubview(view)
             return view
         }
+        liveTextViews = zip(images, imageViews).map { image, imageView in
+            let overlay = ImageAnalysisOverlayView()
+            overlay.trackingImageView = imageView
+            overlay.preferredInteractionTypes = [.textSelection, .dataDetectors]
+            // No floating Live Text button in the corner of every page.
+            overlay.isSupplementaryInterfaceHidden = true
+            addSubview(overlay)
+            return overlay
+        }
         setHighlights(pendingHighlights)
         frame = NSRect(origin: .zero, size: Self.naturalSize(of: images))
         needsLayout = true
+
+        // Analyses arrive whenever they're ready; a page shown again gets its
+        // cached one straight away.
+        for (index, image) in images.enumerated() {
+            let url = urls.indices.contains(index) ? urls[index] : nil
+            let overlay = liveTextViews[index]
+            analysisTasks.append(Task { @MainActor in
+                guard let analysis = await LiveTextAnalyses.shared.analysis(of: image, for: url),
+                      !Task.isCancelled, overlay.superview === self
+                else { return }
+                overlay.analysis = analysis
+            })
+        }
     }
 
     /// Boxes per page, aligned with `images`. Kept if the pages haven't been
@@ -277,6 +307,7 @@ private final class SpreadDocumentView: NSView {
             let frame = NSRect(x: x, y: 0, width: width, height: height)
             imageViews[index].frame = frame
             highlightViews[index].frame = frame
+            liveTextViews[index].frame = frame
             x += width
         }
     }
@@ -298,6 +329,28 @@ private final class SpreadDocumentView: NSView {
         }
     }
 
+}
+
+/// Live Text analyses, one per page, so a page shown twice is analysed once.
+final class LiveTextAnalyses: @unchecked Sendable {
+    static let shared = LiveTextAnalyses()
+
+    private let analyzer = ImageAnalyzer()
+    private let cache = NSCache<NSURL, ImageAnalysis>()
+
+    private init() {
+        cache.countLimit = 60
+    }
+
+    func analysis(of image: NSImage, for url: URL?) async -> ImageAnalysis? {
+        guard ImageAnalyzer.isSupported else { return nil }
+        if let url, let hit = cache.object(forKey: url as NSURL) { return hit }
+        let configuration = ImageAnalyzer.Configuration([.text])
+        guard let analysis = try? await analyzer.analyze(image, orientation: .up, configuration: configuration)
+        else { return nil }
+        if let url { cache.setObject(analysis, forKey: url as NSURL) }
+        return analysis
+    }
 }
 
 /// Draws search hits over a page. Sits over the image view at the same frame,
