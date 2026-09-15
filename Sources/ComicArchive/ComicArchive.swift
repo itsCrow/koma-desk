@@ -12,6 +12,9 @@ import CLibarchive
 public struct ComicArchive: Sendable {
     /// The archive the pages came from.
     public let source: URL
+    /// Stable for this file at this size and modification date. Keys the
+    /// extraction cache, and anything else worth keeping per comic.
+    public let identity: String
     /// Page images in reading order, already extracted to disk.
     public let pages: [URL]
     /// Set when the archive was damaged but some pages were still recoverable.
@@ -41,9 +44,10 @@ extension ComicArchive {
 
     /// Opens `url`, extracting its pages (or reusing a previous extraction).
     public static func open(_ url: URL) throws -> ComicArchive {
-        let directory = cacheRoot.appendingPathComponent(try cacheKey(for: url), isDirectory: true)
+        let identity = try cacheKey(for: url)
+        let directory = cacheRoot.appendingPathComponent(identity, isDirectory: true)
 
-        if let cached = loadManifest(in: directory, source: url) {
+        if let cached = loadManifest(in: directory, source: url, identity: identity) {
             return cached
         }
 
@@ -72,6 +76,7 @@ extension ComicArchive {
 
         return ComicArchive(
             source: url,
+            identity: identity,
             pages: ordered.map { directory.appendingPathComponent($0) },
             warning: warning
         )
@@ -262,7 +267,7 @@ extension ComicArchive {
         directory.appendingPathComponent("manifest.json")
     }
 
-    private static func loadManifest(in directory: URL, source: URL) -> ComicArchive? {
+    private static func loadManifest(in directory: URL, source: URL, identity: String) -> ComicArchive? {
         guard let data = try? Data(contentsOf: manifestURL(in: directory)),
               let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
               !manifest.pages.isEmpty
@@ -280,6 +285,7 @@ extension ComicArchive {
         )
         return ComicArchive(
             source: source,
+            identity: identity,
             pages: pages,
             warning: manifest.warning.map {
                 ArchiveWarning(recoveredPages: $0.recoveredPages, detail: $0.detail)

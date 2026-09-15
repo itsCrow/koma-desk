@@ -37,9 +37,17 @@ struct ReaderView: View {
         .onKeyPress(.home) { model.goToStart(); return .handled }
         .onKeyPress(.end) { model.goToEnd(); return .handled }
         .onKeyPress(.escape) {
+            // A search clears first; the panel goes on the next press.
+            if model.isSearching {
+                model.searchQuery = ""
+                return .handled
+            }
             guard showsControls else { return .ignored }
             setControls(visible: false)
             return .handled
+        }
+        .onChange(of: model.wantsSearchFocus) { _, wants in
+            if wants { setControls(visible: true) }
         }
         .onKeyPress(keys: [.space], phases: .down) { press in
             // Space pages forward through the book; shift-space steps back.
@@ -80,6 +88,7 @@ struct ReaderView: View {
             model: model,
             spreadIndex: model.spreadIndex,
             direction: model.direction,
+            highlights: model.highlightsByPage,
             // Swiping or zooming the pages means the reader is reading again.
             onInteraction: { setControls(visible: false) },
             onTap: { setControls(visible: !showsControls) }
@@ -132,6 +141,9 @@ struct ReaderView: View {
     private func setControls(visible: Bool) {
         guard visible != showsControls else { return }
         withAnimation(.easeOut(duration: 0.22)) { showsControls = visible }
+        // The search field takes the keyboard while the panel is up; the
+        // arrow keys want it back when the panel goes.
+        if !visible { focused = true }
     }
 }
 

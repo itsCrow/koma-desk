@@ -29,6 +29,10 @@ struct PanelsApp: App {
             }
 
             CommandMenu("Go") {
+                Button("Find in Comic…") { model.requestSearch() }
+                    .keyboardShortcut("f")
+                    .disabled(!model.hasComic)
+                Divider()
                 Button("Next Page") { model.goForward() }
                     .keyboardShortcut(.downArrow, modifiers: [])
                     .disabled(!model.canGoForward)

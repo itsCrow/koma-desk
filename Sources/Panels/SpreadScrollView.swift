@@ -67,6 +67,11 @@ final class SpreadScrollView: NSScrollView {
         spreadIndex == index && pageURLs == model.orderedPages(forSpreadAt: index).map(\.url)
     }
 
+    /// Search hits to draw, keyed by page file; only this panel's pages matter.
+    func setHighlights(_ byPage: [URL: [CGRect]]) {
+        pageView.setHighlights(pageURLs.map { byPage[$0] ?? [] })
+    }
+
     func show(_ images: [NSImage]) {
         guard !pageView.isShowing(images) else { return }
         pageView.show(images)
@@ -220,6 +225,9 @@ private final class CenteringClipView: NSClipView {
 private final class SpreadDocumentView: NSView {
     private var images: [NSImage] = []
     private var imageViews: [NSImageView] = []
+    /// One per page, over its image view, drawing the search hits.
+    private var highlightViews: [HighlightOverlayView] = []
+    private var pendingHighlights: [[CGRect]] = []
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
@@ -234,6 +242,7 @@ private final class SpreadDocumentView: NSView {
     func show(_ images: [NSImage]) {
         self.images = images
         imageViews.forEach { $0.removeFromSuperview() }
+        highlightViews.forEach { $0.removeFromSuperview() }
         imageViews = images.map { image in
             let view = NSImageView()
             view.image = image
@@ -242,16 +251,32 @@ private final class SpreadDocumentView: NSView {
             addSubview(view)
             return view
         }
+        highlightViews = images.map { _ in
+            let view = HighlightOverlayView()
+            addSubview(view)
+            return view
+        }
+        setHighlights(pendingHighlights)
         frame = NSRect(origin: .zero, size: Self.naturalSize(of: images))
         needsLayout = true
+    }
+
+    /// Boxes per page, aligned with `images`. Kept if the pages haven't been
+    /// shown yet, and applied when they are.
+    func setHighlights(_ boxesPerPage: [[CGRect]]) {
+        pendingHighlights = boxesPerPage
+        for (view, boxes) in zip(highlightViews, boxesPerPage) { view.boxes = boxes }
+        for view in highlightViews.dropFirst(boxesPerPage.count) { view.boxes = [] }
     }
 
     override func layout() {
         super.layout()
         let height = bounds.height
         var x: CGFloat = 0
-        for (view, width) in zip(imageViews, Self.scaledWidths(of: images, at: height)) {
-            view.frame = NSRect(x: x, y: 0, width: width, height: height)
+        for (index, width) in Self.scaledWidths(of: images, at: height).enumerated() {
+            let frame = NSRect(x: x, y: 0, width: width, height: height)
+            imageViews[index].frame = frame
+            highlightViews[index].frame = frame
             x += width
         }
     }
@@ -273,6 +298,40 @@ private final class SpreadDocumentView: NSView {
         }
     }
 
+}
+
+/// Draws search hits over a page. Sits over the image view at the same frame,
+/// so it scales and pans with the page for free.
+private final class HighlightOverlayView: NSView {
+    /// Vision's boxes: unit rects with the origin at the image's bottom-left.
+    var boxes: [CGRect] = [] {
+        didSet { if boxes != oldValue { needsDisplay = true } }
+    }
+
+    override var isFlipped: Bool { true }
+
+    /// Never in the way of a click, a scroll or a swipe.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard !boxes.isEmpty else { return }
+        let size = bounds.size
+        for box in boxes {
+            // This view is flipped; Vision's y runs the other way.
+            let rect = NSRect(
+                x: box.minX * size.width,
+                y: (1 - box.maxY) * size.height,
+                width: box.width * size.width,
+                height: box.height * size.height
+            ).insetBy(dx: -size.width * 0.004, dy: -size.height * 0.003)
+            let path = NSBezierPath(roundedRect: rect, xRadius: rect.height * 0.2, yRadius: rect.height * 0.2)
+            NSColor(calibratedRed: 1, green: 0.85, blue: 0.1, alpha: 0.38).setFill()
+            path.fill()
+            NSColor(calibratedRed: 1, green: 0.75, blue: 0, alpha: 0.9).setStroke()
+            path.lineWidth = max(size.height * 0.0015, 1)
+            path.stroke()
+        }
+    }
 }
 
 private extension NSImage {

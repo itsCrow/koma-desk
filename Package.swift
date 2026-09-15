@@ -13,8 +13,12 @@ let package = Package(
         ),
         // Archive handling, free of any UI so it can be tested on its own.
         .target(name: "ComicArchive", dependencies: ["CLibarchive"]),
+        // Reading the lettering off pages and searching it. No UI, so it can
+        // be tested on its own.
+        .target(name: "PageSearch"),
         // The SwiftUI reader.
-        .executableTarget(name: "Panels", dependencies: ["ComicArchive"]),
+        .executableTarget(name: "Panels", dependencies: ["ComicArchive", "PageSearch"]),
         .testTarget(name: "ComicArchiveTests", dependencies: ["ComicArchive"]),
+        .testTarget(name: "PageSearchTests", dependencies: ["PageSearch", "ComicArchive"]),
     ]
 )

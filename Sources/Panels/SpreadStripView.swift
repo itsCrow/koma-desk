@@ -10,6 +10,8 @@ struct SpreadStrip: NSViewRepresentable {
     /// rather than relying on the body happening to observe them elsewhere.
     let spreadIndex: Int
     let direction: ReadingDirection
+    /// Search hits to draw over each page, keyed by page file.
+    let highlights: [URL: [CGRect]]
     /// Called as the reader pans, zooms or swipes.
     let onInteraction: () -> Void
     /// A plain click on a page — not a drag, not a swipe.
@@ -19,6 +21,7 @@ struct SpreadStrip: NSViewRepresentable {
         let strip = SpreadStripView()
         strip.onInteraction = onInteraction
         strip.onTap = onTap
+        strip.highlights = highlights
         strip.synchronise(with: model)
         return strip
     }
@@ -26,6 +29,7 @@ struct SpreadStrip: NSViewRepresentable {
     func updateNSView(_ strip: SpreadStripView, context: Context) {
         strip.onInteraction = onInteraction
         strip.onTap = onTap
+        strip.highlights = highlights
         strip.synchronise(with: model)
     }
 }
@@ -35,6 +39,12 @@ struct SpreadStrip: NSViewRepresentable {
 final class SpreadStripView: NSView {
     var onInteraction: (() -> Void)?
     var onTap: (() -> Void)?
+    var highlights: [URL: [CGRect]] = [:] {
+        didSet {
+            guard highlights != oldValue else { return }
+            for panel in [leftPanel, centrePanel, rightPanel] { panel?.setHighlights(highlights) }
+        }
+    }
 
     /// Black space between one spread and the next. This is the *only* black
     /// that should show during a swipe.
@@ -172,6 +182,7 @@ final class SpreadStripView: NSView {
         panel.pageURLs = pages.map(\.url)
         panel.swipeCoordinator = self
         panel.onInteraction = { [weak self] in self?.onInteraction?() }
+        panel.setHighlights(highlights)
         addSubview(panel)
 
         if let images = model.cachedImages(forSpreadAt: index) {
