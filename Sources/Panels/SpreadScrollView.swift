@@ -13,16 +13,25 @@ struct ZoomableSpread: NSViewRepresentable {
     let images: [NSImage]
     /// Called on pan or zoom, so the chrome reappears while the reader is busy.
     let onInteraction: () -> Void
+    /// A completed two-finger swipe to the right, which drags the page right and
+    /// so reveals whatever lies to its left.
+    let onSwipeRight: () -> Void
+    /// A completed two-finger swipe to the left.
+    let onSwipeLeft: () -> Void
 
     func makeNSView(context: Context) -> SpreadScrollView {
         let scrollView = SpreadScrollView()
         scrollView.onInteraction = onInteraction
+        scrollView.onSwipeRight = onSwipeRight
+        scrollView.onSwipeLeft = onSwipeLeft
         scrollView.show(images)
         return scrollView
     }
 
     func updateNSView(_ scrollView: SpreadScrollView, context: Context) {
         scrollView.onInteraction = onInteraction
+        scrollView.onSwipeRight = onSwipeRight
+        scrollView.onSwipeLeft = onSwipeLeft
         scrollView.show(images)
     }
 }
@@ -31,6 +40,8 @@ struct ZoomableSpread: NSViewRepresentable {
 
 final class SpreadScrollView: NSScrollView {
     var onInteraction: (() -> Void)?
+    var onSwipeRight: (() -> Void)?
+    var onSwipeLeft: (() -> Void)?
 
     private let pageView = SpreadDocumentView()
     /// The view starts at magnification 1.0 — native pixel size — and the first
@@ -101,9 +112,65 @@ final class SpreadScrollView: NSScrollView {
         hasFitted = true
     }
 
+    // MARK: - Swipe navigation
+
+    /// Required for the full gesture stream that `trackSwipeEvent` needs.
+    override func wantsScrollEventsForSwipeTracking(on axis: NSEvent.GestureAxis) -> Bool {
+        axis == .horizontal
+    }
+
     override func scrollWheel(with event: NSEvent) {
+        if beginSwipeNavigation(with: event) { return }
         super.scrollWheel(with: event)
         onInteraction?()
+    }
+
+    /// Turns a horizontal two-finger swipe into a page turn, and reports whether
+    /// it took the gesture over.
+    ///
+    /// A zoomed-in page pans first and only turns once it has nothing left to
+    /// show in that direction — the same way Safari pans a wide page before it
+    /// goes back.
+    private func beginSwipeNavigation(with event: NSEvent) -> Bool {
+        // Honours the "Swipe between pages" setting in System Settings.
+        guard NSEvent.isSwipeTrackingFromScrollEventsEnabled,
+              event.phase == .began,
+              abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY),
+              hasNothingLeftToPan(towards: event.scrollingDeltaX)
+        else { return false }
+
+        var navigated = false
+        event.trackSwipeEvent(
+            options: .lockDirection,
+            dampenAmountThresholdMin: -1,
+            max: 1
+        ) { [weak self] amount, _, isComplete, _ in
+            guard let self, isComplete, !navigated else { return }
+            // trackSwipeEvent normalises the direction, so +1 is a rightward
+            // swipe whether or not natural scrolling is on. Anything short of a
+            // committed swipe settles near zero and turns nothing.
+            if amount > 0.5 {
+                navigated = true
+                self.onSwipeRight?()
+            } else if amount < -0.5 {
+                navigated = true
+                self.onSwipeLeft?()
+            }
+        }
+        return true
+    }
+
+    /// Whether the page is already as far over as it goes in the swipe's
+    /// direction. A fitted page has no room at all, so it always qualifies.
+    private func hasNothingLeftToPan(towards deltaX: CGFloat) -> Bool {
+        let visible = documentVisibleRect
+        let content = pageView.frame
+        guard content.width > visible.width + 0.5 else { return true }
+        guard deltaX != 0 else { return false }
+        // A positive delta drags the page right, uncovering what's further left.
+        return deltaX > 0
+            ? visible.minX <= 0.5
+            : visible.maxX >= content.width - 0.5
     }
 
     override func magnify(with event: NSEvent) {

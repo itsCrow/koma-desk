@@ -160,7 +160,15 @@ private struct SpreadCanvas: View {
                 Color.black
                     .overlay(ProgressView().controlSize(.small).tint(.white))
             } else {
-                ZoomableSpread(images: images, onInteraction: onInteraction)
+                // Swiping right drags the page right, revealing what sits to
+                // its left — exactly what the left arrow key does, including
+                // the flip for right-to-left manga.
+                ZoomableSpread(
+                    images: images,
+                    onInteraction: onInteraction,
+                    onSwipeRight: loader.pressedLeftArrow,
+                    onSwipeLeft: loader.pressedRightArrow
+                )
             }
         }
         .task(id: pages.map(\.url)) {
