@@ -219,6 +219,10 @@ final class SpreadStripView: NSView {
         let moving = isSwiping || isAnimating
         leftPanel?.isHidden = !moving
         rightPanel?.isHidden = !moving
+        // Whatever is in the centre is always on screen. Promotion can hand the
+        // centre a panel that was hidden moments earlier, and a page that never
+        // gets un-hidden is just a black window.
+        centrePanel?.isHidden = false
 
         let step = self.step
         CATransaction.begin()
@@ -370,11 +374,15 @@ final class SpreadStripView: NSView {
     private func finishSlideNow() {
         guard let link = displayLink else { return }
         link.invalidate()
-        displayLink = nil
-        offset = slideTo
         let completion = slideCompletion
         slideCompletion = nil
+
+        // The slide stays "in progress" across the promotion, so the panels it
+        // hands over are still visible while it happens.
+        offset = slideTo
         completion?()
+
+        displayLink = nil
         positionPanels()
     }
 }
