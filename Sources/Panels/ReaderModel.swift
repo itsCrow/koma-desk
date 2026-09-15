@@ -30,8 +30,6 @@ final class ReaderModel {
     /// Width-to-height of a two-page spread of the open comic. The window keeps
     /// this shape, which is what lets a spread fill it with no bars either side.
     private(set) var spreadAspect: CGFloat?
-    /// Seconds spent with this comic open, across sessions.
-    private(set) var readingTime: TimeInterval = 0
 
     var errorMessage: String?
     var spreadIndex = 0 {
@@ -53,7 +51,6 @@ final class ReaderModel {
     @ObservationIgnored private var source: URL?
     /// Pages that are wider than they are tall — double-page scans, shown alone.
     @ObservationIgnored private var wideFlags: [Bool] = []
-    @ObservationIgnored private var readingClock: Task<Void, Never>?
 
     private static let directionKey = "PanelsReadingDirection"
 
@@ -138,13 +135,9 @@ final class ReaderModel {
         spreadIndex = min(max(restored, 0), max(spreads.count - 1, 0))
         prefetchNeighbours()
         NSDocumentController.shared.noteNewRecentDocumentURL(comic.source)
-
-        readingTime = restoredReadingTime()
-        startReadingClock()
     }
 
     func closeComic() {
-        stopReadingClock()
         cache.removeAll()
         source = nil
         title = nil
@@ -269,49 +262,6 @@ final class ReaderModel {
         Task.detached(priority: .background) {
             cache.prefetch(neighbours)
         }
-    }
-
-    // MARK: - Reading time
-
-    var readingTimeLabel: String {
-        let total = Int(readingTime)
-        let hours = total / 3600, minutes = (total % 3600) / 60, seconds = total % 60
-        return hours > 0
-            ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
-            : String(format: "%d:%02d", minutes, seconds)
-    }
-
-    /// Ticks once a second while the comic is open and the app is in front —
-    /// time spent in another app doesn't count as reading.
-    private func startReadingClock() {
-        stopReadingClock()
-        readingClock = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard let self, !Task.isCancelled, NSApp.isActive else { continue }
-                self.readingTime += 1
-                self.saveReadingTime()
-            }
-        }
-    }
-
-    private func stopReadingClock() {
-        readingClock?.cancel()
-        readingClock = nil
-    }
-
-    private func readingTimeKey(for url: URL) -> String {
-        "PanelsReadingTime:\(url.standardizedFileURL.path)"
-    }
-
-    private func saveReadingTime() {
-        guard let source else { return }
-        UserDefaults.standard.set(readingTime, forKey: readingTimeKey(for: source))
-    }
-
-    private func restoredReadingTime() -> TimeInterval {
-        guard let source else { return 0 }
-        return UserDefaults.standard.double(forKey: readingTimeKey(for: source))
     }
 
     // MARK: - Reading position

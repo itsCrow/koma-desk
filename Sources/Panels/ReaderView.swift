@@ -27,6 +27,7 @@ struct ReaderView: View {
             overlays
         }
         .frame(minWidth: 640, minHeight: 480)
+        .navigationTitle(model.title ?? "Panels")
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
@@ -89,19 +90,35 @@ struct ReaderView: View {
 
     @ViewBuilder
     private var overlays: some View {
-        ZStack(alignment: .bottom) {
-            if showsControls, model.hasComic {
-                // Dims the pages, and a click on them puts the panel away.
-                Color.black.opacity(0.4)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture { setControls(visible: false) }
-                    .transition(.opacity)
+        GeometryReader { geometry in
+            ZStack(alignment: .bottom) {
+                if showsControls, model.hasComic {
+                    // Dims the pages, and a click on them puts the panel away.
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { setControls(visible: false) }
+                        .transition(.opacity)
 
-                ReaderControlsPanel(model: model)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    ReaderControlsPanel(model: model, height: max(260, geometry.size.height * 0.4))
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .overlay(alignment: .topLeading) {
+            if showsControls, let title = model.title {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .glassPanel(cornerRadius: 12)
+                    .padding(16)
+                    .transition(.opacity)
             }
         }
         .overlay(alignment: .top) {

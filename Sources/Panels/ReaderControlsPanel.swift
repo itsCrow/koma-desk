@@ -3,48 +3,57 @@ import ComicArchive
 
 /// The glass panel that rises from the bottom when the reader clicks a page:
 /// an overview of every page with the current spread raised, a progress bar,
-/// and the reading time and position.
+/// and the position in the book. Everything is sized from the panel's own
+/// height, so it keeps its proportions in any window.
 struct ReaderControlsPanel: View {
     @Bindable var model: ReaderModel
+    /// The panel's height; the reader decides it from the window.
+    let height: CGFloat
 
-    private static let thumbnailHeight: CGFloat = 132
-    private static let currentScale: CGFloat = 1.22
+    private var thumbnailHeight: CGFloat { height * 0.44 }
+    private static let currentScale: CGFloat = 1.28
+    private static let cornerRadius: CGFloat = 26
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             overview
-                .frame(height: Self.thumbnailHeight * Self.currentScale + 40)
-                .overlay(alignment: .leading) { edgeArrow("chevron.left", enabled: leftEnabled) { model.pressedLeftArrow() } }
-                .overlay(alignment: .trailing) { edgeArrow("chevron.right", enabled: rightEnabled) { model.pressedRightArrow() } }
+                .frame(maxHeight: .infinity)
+                .overlay(alignment: .leading) {
+                    edgeArrow("chevron.left", enabled: leftEnabled) { model.pressedLeftArrow() }
+                }
+                .overlay(alignment: .trailing) {
+                    edgeArrow("chevron.right", enabled: rightEnabled) { model.pressedRightArrow() }
+                }
 
             progressBar
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 26)
 
             HStack {
-                Text("Time reading: \(model.readingTimeLabel)")
                 Spacer()
                 Text("Page: \(model.currentPageNumber) of \(model.pages.count)")
+                    .font(.system(size: 19, weight: .regular))
+                    .foregroundStyle(.white)
             }
-            .font(.system(size: 17, weight: .regular))
-            .foregroundStyle(.white.opacity(0.92))
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 22)
         }
-        .padding(.top, 18)
-        .padding(.bottom, 20)
+        .frame(height: height)
         .overlay(alignment: .topTrailing) {
             Button {
                 NSApp.keyWindow?.toggleFullScreen(nil)
             } label: {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(width: 36, height: 36)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(10)
+            .padding(8)
             .help("Full Screen")
         }
-        .glassPanel(cornerRadius: 28)
+        .glassPanel(cornerRadius: Self.cornerRadius)
     }
 
     // MARK: - Page overview
@@ -52,14 +61,16 @@ struct ReaderControlsPanel: View {
     private var overview: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .bottom, spacing: 18) {
+                // Pages of one spread sit close together; spreads sit apart.
+                LazyHStack(alignment: .bottom, spacing: 44) {
                     ForEach(model.spreads.indices, id: \.self) { index in
                         spreadThumbnail(at: index)
                             .id(index)
                     }
                 }
-                .padding(.horizontal, 90)
-                .padding(.top, 20)
+                .padding(.horizontal, 60)
+                .padding(.top, thumbnailHeight * (Self.currentScale - 1) + 24)
+                .padding(.bottom, 6)
             }
             .onAppear { proxy.scrollTo(model.spreadIndex, anchor: .center) }
             .onChange(of: model.spreadIndex) { _, index in
@@ -73,13 +84,17 @@ struct ReaderControlsPanel: View {
         return Button {
             model.goTo(spread: index)
         } label: {
-            HStack(alignment: .bottom, spacing: 3) {
+            HStack(alignment: .bottom, spacing: 12) {
                 ForEach(model.orderedPages(forSpreadAt: index), id: \.number) { page in
-                    VStack(spacing: 8) {
-                        PageThumbnail(url: page.url, height: Self.thumbnailHeight)
+                    VStack(spacing: 10) {
+                        PageThumbnail(url: page.url, height: thumbnailHeight)
+                        // The raised spread is the one being read; it doesn't
+                        // need a number, and leaving the slot keeps the rows
+                        // bottom-aligned.
                         Text("\(page.number)")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(isCurrent ? 0.95 : 0.55))
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .opacity(isCurrent ? 0 : 1)
                     }
                 }
             }
@@ -92,13 +107,15 @@ struct ReaderControlsPanel: View {
     private func edgeArrow(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white.opacity(enabled ? 0.95 : 0.3))
-                .frame(width: 56, height: 56)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white.opacity(enabled ? 1 : 0.35))
+                .frame(width: 62, height: 62)
+                .background(.black.opacity(0.45), in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .glassPanel(cornerRadius: 28)
         .padding(.horizontal, 14)
+        .padding(.bottom, 30)
         .disabled(!enabled)
     }
 
@@ -119,16 +136,17 @@ struct ReaderControlsPanel: View {
             let fraction = model.spreads.isEmpty
                 ? 0 : CGFloat(model.spreadIndex + 1) / CGFloat(model.spreads.count)
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.25))
+                Capsule().fill(.white.opacity(0.3))
                 Capsule().fill(.white).frame(width: geometry.size.width * fraction)
             }
         }
-        .frame(height: 4)
+        .frame(height: 3)
     }
 }
 
 // MARK: - Thumbnail
 
+/// A page in a white frame, the way a printed page sits on a shelf.
 private struct PageThumbnail: View {
     let url: URL
     let height: CGFloat
@@ -147,10 +165,10 @@ private struct PageThumbnail: View {
                     .aspectRatio(0.7, contentMode: .fit)
             }
         }
-        .frame(height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
-        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.35), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.45), radius: 6, y: 3)
+        .frame(height: height - 14)
+        .padding(7)
+        .background(.white, in: RoundedRectangle(cornerRadius: 6))
+        .shadow(color: .black.opacity(0.4), radius: 8, y: 4)
         .task(id: url) {
             image = await ThumbnailCache.shared.thumbnail(for: url)
         }
@@ -159,7 +177,7 @@ private struct PageThumbnail: View {
 
 // MARK: - Glass
 
-private extension View {
+extension View {
     /// Liquid Glass where the system has it, the nearest material where it
     /// doesn't. Deployment target is macOS 14; the effect arrived in 26.
     @ViewBuilder

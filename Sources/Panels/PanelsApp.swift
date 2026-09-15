@@ -7,7 +7,7 @@ struct PanelsApp: App {
     @State private var model = ReaderModel.shared
 
     var body: some Scene {
-        Window(model.title ?? "Panels", id: "reader") {
+        Window("Panels", id: "reader") {
             ReaderView(model: model)
                 .background(WindowConfigurator(spreadAspect: model.spreadAspect))
         }
