@@ -74,16 +74,14 @@ struct ReaderView: View {
     // MARK: - Pages
 
     private var spread: some View {
-        HStack(spacing: 0) {
-            ForEach(model.visiblePages, id: \.number) { page in
-                PageImageView(url: page.url, loader: model)
-            }
-        }
-        .padding(8)
-        // Without this the two pages cross-fade into each other on every turn.
-        .id(model.spreadIndex)
-        .transition(.opacity)
-        .animation(.easeOut(duration: 0.12), value: model.spreadIndex)
+        SpreadCanvas(pages: model.visiblePages, loader: model, onInteraction: revealChrome)
+            .padding(8)
+            // Without this the two pages cross-fade into each other on every
+            // turn. It also gives each spread a fresh canvas, so a page turn
+            // returns to fit rather than stranding you zoomed into a corner.
+            .id(model.spreadIndex)
+            .transition(.opacity)
+            .animation(.easeOut(duration: 0.12), value: model.spreadIndex)
     }
 
     // MARK: - Chrome
@@ -148,28 +146,31 @@ struct ReaderView: View {
 
 // MARK: - Components
 
-/// Loads a single page asynchronously so a slow decode never blocks a page turn.
-private struct PageImageView: View {
-    let url: URL
+/// Loads the spread's pages asynchronously so a slow decode never blocks a page
+/// turn, then hands them to the zoomable canvas.
+private struct SpreadCanvas: View {
+    let pages: [(number: Int, url: URL)]
     let loader: ReaderModel
-    @State private var image: NSImage?
+    let onInteraction: () -> Void
+    @State private var images: [NSImage] = []
 
     var body: some View {
         Group {
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-            } else {
+            if images.isEmpty {
                 Color.black
                     .overlay(ProgressView().controlSize(.small).tint(.white))
+            } else {
+                ZoomableSpread(images: images, onInteraction: onInteraction)
             }
         }
-        .task(id: url) {
-            let loaded = await loader.image(for: url)
+        .task(id: pages.map(\.url)) {
+            var loaded: [NSImage] = []
+            for page in pages {
+                guard let image = await loader.image(for: page.url) else { continue }
+                loaded.append(image)
+            }
             guard !Task.isCancelled else { return }
-            image = loaded
+            images = loaded
         }
     }
 }
