@@ -146,7 +146,7 @@ struct ReaderControlsPanel: View {
 
 // MARK: - Thumbnail
 
-/// A page in a white frame, the way a printed page sits on a shelf.
+/// A page at thumbnail size — nothing added around it; a page is white on its own.
 private struct PageThumbnail: View {
     let url: URL
     let height: CGFloat
@@ -165,9 +165,8 @@ private struct PageThumbnail: View {
                     .aspectRatio(0.7, contentMode: .fit)
             }
         }
-        .frame(height: height - 14)
-        .padding(7)
-        .background(.white, in: RoundedRectangle(cornerRadius: 6))
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
         .shadow(color: .black.opacity(0.4), radius: 8, y: 4)
         .task(id: url) {
             image = await ThumbnailCache.shared.thumbnail(for: url)
