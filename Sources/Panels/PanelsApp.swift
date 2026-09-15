@@ -1,4 +1,5 @@
 import SwiftUI
+import ComicArchive
 
 @main
 struct PanelsApp: App {

@@ -1,47 +1,21 @@
 import AppKit
 import SwiftUI
 
-/// The zoomable page canvas.
-///
-/// This is AppKit rather than SwiftUI on purpose. A two-finger slide is a
-/// scroll event, not a drag, so SwiftUI's `DragGesture` never sees it, and
-/// `MagnifyGesture` would leave us hand-rolling anchoring, clamping, momentum
-/// and rubber-banding. `NSScrollView` already does all of that the way every
-/// other Mac app does.
-struct ZoomableSpread: NSViewRepresentable {
-    /// The spread's pages, already in on-screen order for the reading direction.
-    let images: [NSImage]
-    /// Called on pan or zoom, so the chrome reappears while the reader is busy.
-    let onInteraction: () -> Void
-    /// A completed two-finger swipe to the right, which drags the page right and
-    /// so reveals whatever lies to its left.
-    let onSwipeRight: () -> Void
-    /// A completed two-finger swipe to the left.
-    let onSwipeLeft: () -> Void
-
-    func makeNSView(context: Context) -> SpreadScrollView {
-        let scrollView = SpreadScrollView()
-        scrollView.onInteraction = onInteraction
-        scrollView.onSwipeRight = onSwipeRight
-        scrollView.onSwipeLeft = onSwipeLeft
-        scrollView.show(images)
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: SpreadScrollView, context: Context) {
-        scrollView.onInteraction = onInteraction
-        scrollView.onSwipeRight = onSwipeRight
-        scrollView.onSwipeLeft = onSwipeLeft
-        scrollView.show(images)
-    }
-}
-
 // MARK: - Scroll view
 
+/// One spread's worth of pages: zoomable, pannable, and aware that once it has
+/// nothing left to pan the gesture belongs to the strip that owns it.
 final class SpreadScrollView: NSScrollView {
     var onInteraction: (() -> Void)?
-    var onSwipeRight: (() -> Void)?
-    var onSwipeLeft: (() -> Void)?
+
+    /// Which spread this panel is showing, so the strip can tell its panels
+    /// apart as they're recycled.
+    var spreadIndex = 0
+    /// The pages on show, in screen order. Also identifies the panel's contents
+    /// across a reading-direction flip, which reverses them.
+    var pageURLs: [URL] = []
+
+    weak var swipeCoordinator: SpreadStripView?
 
     private let pageView = SpreadDocumentView()
     /// The view starts at magnification 1.0 — native pixel size — and the first
@@ -74,6 +48,13 @@ final class SpreadScrollView: NSScrollView {
     /// a page would hand it first responder and the arrow keys would scroll it
     /// instead of turning the page.
     override var acceptsFirstResponder: Bool { false }
+
+    /// Whether this panel already shows the given spread, pages and all. The
+    /// page check matters because flipping reading direction reverses them
+    /// without changing the spread index.
+    func isShowing(spreadAt index: Int, in model: ReaderModel) -> Bool {
+        spreadIndex == index && pageURLs == model.orderedPages(forSpreadAt: index).map(\.url)
+    }
 
     func show(_ images: [NSImage]) {
         guard !pageView.isShowing(images) else { return }
@@ -112,7 +93,7 @@ final class SpreadScrollView: NSScrollView {
         hasFitted = true
     }
 
-    // MARK: - Swipe navigation
+    // MARK: - Swipe
 
     /// Required for the full gesture stream that `trackSwipeEvent` needs.
     override func wantsScrollEventsForSwipeTracking(on axis: NSEvent.GestureAxis) -> Bool {
@@ -120,44 +101,22 @@ final class SpreadScrollView: NSScrollView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if beginSwipeNavigation(with: event) { return }
+        if shouldYieldToStrip(for: event), swipeCoordinator?.beginSwipe(with: event) == true {
+            return
+        }
         super.scrollWheel(with: event)
         onInteraction?()
     }
 
-    /// Turns a horizontal two-finger swipe into a page turn, and reports whether
-    /// it took the gesture over.
-    ///
-    /// A zoomed-in page pans first and only turns once it has nothing left to
-    /// show in that direction — the same way Safari pans a wide page before it
-    /// goes back.
-    private func beginSwipeNavigation(with event: NSEvent) -> Bool {
+    /// A horizontal two-finger swipe belongs to the strip, but only once this
+    /// page has nothing left to show in that direction — the same way Safari
+    /// pans a wide page before it goes back.
+    private func shouldYieldToStrip(for event: NSEvent) -> Bool {
         // Honours the "Swipe between pages" setting in System Settings.
-        guard NSEvent.isSwipeTrackingFromScrollEventsEnabled,
-              event.phase == .began,
-              abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY),
-              hasNothingLeftToPan(towards: event.scrollingDeltaX)
-        else { return false }
-
-        var navigated = false
-        event.trackSwipeEvent(
-            options: .lockDirection,
-            dampenAmountThresholdMin: -1,
-            max: 1
-        ) { [weak self] amount, _, isComplete, _ in
-            guard let self, isComplete, !navigated else { return }
-            // trackSwipeEvent normalises the direction, so +1 is a rightward
-            // swipe whether or not natural scrolling is on. Anything short of a
-            // committed swipe settles near zero and turns nothing.
-            if amount > 0.5 {
-                navigated = true
-                self.onSwipeRight?()
-            } else if amount < -0.5 {
-                navigated = true
-                self.onSwipeLeft?()
-            }
-        }
-        return true
+        NSEvent.isSwipeTrackingFromScrollEventsEnabled
+            && event.phase == .began
+            && abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            && hasNothingLeftToPan(towards: event.scrollingDeltaX)
     }
 
     /// Whether the page is already as far over as it goes in the swipe's

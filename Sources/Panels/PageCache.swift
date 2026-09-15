@@ -26,6 +26,13 @@ final class PageCache: @unchecked Sendable {
         return LoadedPage(image: image)
     }
 
+    /// A page only if it's already decoded. Building the incoming panel of a
+    /// swipe has to happen within the frame, so it asks for what's on hand
+    /// rather than waiting on a decode.
+    func cached(_ url: URL) -> NSImage? {
+        cache.object(forKey: url as NSURL)
+    }
+
     /// Warms the cache for pages the reader is about to need.
     func prefetch(_ urls: [URL]) {
         for url in urls where cache.object(forKey: url as NSURL) == nil {

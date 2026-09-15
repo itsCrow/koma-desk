@@ -74,14 +74,13 @@ struct ReaderView: View {
     // MARK: - Pages
 
     private var spread: some View {
-        SpreadCanvas(pages: model.visiblePages, loader: model, onInteraction: revealChrome)
-            .padding(8)
-            // Without this the two pages cross-fade into each other on every
-            // turn. It also gives each spread a fresh canvas, so a page turn
-            // returns to fit rather than stranding you zoomed into a corner.
-            .id(model.spreadIndex)
-            .transition(.opacity)
-            .animation(.easeOut(duration: 0.12), value: model.spreadIndex)
+        SpreadStrip(
+            model: model,
+            spreadIndex: model.spreadIndex,
+            direction: model.direction,
+            onInteraction: revealChrome
+        )
+        .padding(8)
     }
 
     // MARK: - Chrome
@@ -145,43 +144,6 @@ struct ReaderView: View {
 }
 
 // MARK: - Components
-
-/// Loads the spread's pages asynchronously so a slow decode never blocks a page
-/// turn, then hands them to the zoomable canvas.
-private struct SpreadCanvas: View {
-    let pages: [(number: Int, url: URL)]
-    let loader: ReaderModel
-    let onInteraction: () -> Void
-    @State private var images: [NSImage] = []
-
-    var body: some View {
-        Group {
-            if images.isEmpty {
-                Color.black
-                    .overlay(ProgressView().controlSize(.small).tint(.white))
-            } else {
-                // Swiping right drags the page right, revealing what sits to
-                // its left — exactly what the left arrow key does, including
-                // the flip for right-to-left manga.
-                ZoomableSpread(
-                    images: images,
-                    onInteraction: onInteraction,
-                    onSwipeRight: loader.pressedLeftArrow,
-                    onSwipeLeft: loader.pressedRightArrow
-                )
-            }
-        }
-        .task(id: pages.map(\.url)) {
-            var loaded: [NSImage] = []
-            for page in pages {
-                guard let image = await loader.image(for: page.url) else { continue }
-                loaded.append(image)
-            }
-            guard !Task.isCancelled else { return }
-            images = loaded
-        }
-    }
-}
 
 private struct NavigationArrow: View {
     let systemName: String

@@ -158,6 +158,62 @@ struct SanitizeTests {
     }
 }
 
+// MARK: - Neighbouring spreads
+
+@Suite("Off-screen neighbours")
+struct NeighbourTests {
+    @Test("In a Western comic the previous spread waits on the left")
+    func leftToRight() {
+        #expect(neighbouringSpread(from: 5, on: .left,
+                                   direction: .leftToRight, spreadCount: 10) == 4)
+        #expect(neighbouringSpread(from: 5, on: .right,
+                                   direction: .leftToRight, spreadCount: 10) == 6)
+    }
+
+    @Test("In manga the sides swap: the next spread waits on the left")
+    func rightToLeft() {
+        // The flip that's easy to get backwards and invisible until you swipe.
+        #expect(neighbouringSpread(from: 5, on: .left,
+                                   direction: .rightToLeft, spreadCount: 10) == 6)
+        #expect(neighbouringSpread(from: 5, on: .right,
+                                   direction: .rightToLeft, spreadCount: 10) == 4)
+    }
+
+    @Test("There is nothing beyond either end of the book")
+    func ends() {
+        // First spread, whichever way the book runs.
+        #expect(neighbouringSpread(from: 0, on: .left,
+                                   direction: .leftToRight, spreadCount: 3) == nil)
+        #expect(neighbouringSpread(from: 0, on: .right,
+                                   direction: .rightToLeft, spreadCount: 3) == nil)
+        // Last spread.
+        #expect(neighbouringSpread(from: 2, on: .right,
+                                   direction: .leftToRight, spreadCount: 3) == nil)
+        #expect(neighbouringSpread(from: 2, on: .left,
+                                   direction: .rightToLeft, spreadCount: 3) == nil)
+    }
+
+    @Test("A comic with no spreads has no neighbours")
+    func empty() {
+        #expect(neighbouringSpread(from: 0, on: .left,
+                                   direction: .leftToRight, spreadCount: 0) == nil)
+        #expect(neighbouringSpread(from: 0, on: .right,
+                                   direction: .leftToRight, spreadCount: 0) == nil)
+    }
+
+    @Test("Flipping direction swaps which spread is on which side")
+    func flipIsSymmetric() {
+        for index in 1..<9 {
+            for direction in ReadingDirection.allCases {
+                #expect(neighbouringSpread(from: index, on: .left,
+                                           direction: direction, spreadCount: 10)
+                        == neighbouringSpread(from: index, on: .right,
+                                              direction: direction.flipped, spreadCount: 10))
+            }
+        }
+    }
+}
+
 // MARK: - Cache pruning
 
 @Suite("Cache pruning")

@@ -49,3 +49,40 @@ public func buildSpreads(pageCount: Int, isWide: [Bool]) -> [Spread] {
     }
     return spreads
 }
+
+// MARK: - Reading direction
+
+/// Which way the comic reads.
+public enum ReadingDirection: String, CaseIterable, Sendable {
+    /// Manga: page 1 sits on the right, and the left arrow advances.
+    case rightToLeft
+    /// Western comics: page 1 sits on the left, and the right arrow advances.
+    case leftToRight
+
+    public var flipped: ReadingDirection {
+        self == .rightToLeft ? .leftToRight : .rightToLeft
+    }
+}
+
+/// Which side of the window a spread sits on.
+public enum ScreenSide: Sendable {
+    case left
+    case right
+}
+
+/// The spread parked off-screen on the given side, or nil at the ends of the book.
+///
+/// Reading direction decides which way the book runs past the window, so in
+/// manga the spread waiting off to the *left* is the one you haven't read yet —
+/// the opposite of a Western comic. Getting this backwards is easy and invisible
+/// until you swipe, which is why it lives here rather than in the view.
+public func neighbouringSpread(
+    from index: Int,
+    on side: ScreenSide,
+    direction: ReadingDirection,
+    spreadCount: Int
+) -> Int? {
+    let forwards = (side == .left) == (direction == .rightToLeft)
+    let candidate = forwards ? index + 1 : index - 1
+    return (0..<spreadCount).contains(candidate) ? candidate : nil
+}

@@ -4,22 +4,14 @@ import Observation
 import UniformTypeIdentifiers
 import ComicArchive
 
-/// Which way the comic reads.
-enum ReadingDirection: String, CaseIterable {
-    /// Manga: page 1 sits on the right, and the left arrow advances.
-    case rightToLeft
-    /// Western comics: page 1 sits on the left, and the right arrow advances.
-    case leftToRight
-
+extension ReadingDirection {
+    /// How the direction is named in the menu. The enum itself lives in
+    /// ComicArchive, which has no business knowing about menus.
     var label: String {
         switch self {
         case .rightToLeft: return "Right to Left (Manga)"
         case .leftToRight: return "Left to Right"
         }
-    }
-
-    var flipped: ReadingDirection {
-        self == .rightToLeft ? .leftToRight : .rightToLeft
     }
 }
 
@@ -157,11 +149,37 @@ final class ReaderModel {
         spreads.indices.contains(spreadIndex) ? spreads[spreadIndex] : nil
     }
 
+    /// A spread's page URLs in the order they appear on screen.
+    func orderedPages(forSpreadAt index: Int) -> [(number: Int, url: URL)] {
+        guard spreads.indices.contains(index) else { return [] }
+        let indices = spreads[index].pageIndices
+        let ordered = direction == .rightToLeft ? indices.reversed().map { $0 } : indices
+        return ordered.map { (number: $0 + 1, url: pages[$0]) }
+    }
+
     /// The current spread's page URLs in the order they appear on screen.
     var visiblePages: [(number: Int, url: URL)] {
-        guard let spread = currentSpread else { return [] }
-        let ordered = direction == .rightToLeft ? spread.pageIndices.reversed().map { $0 } : spread.pageIndices
-        return ordered.map { (number: $0 + 1, url: pages[$0]) }
+        orderedPages(forSpreadAt: spreadIndex)
+    }
+
+    /// A spread's images, but only if they're already decoded. The strip builds
+    /// an incoming panel with these so a swipe never waits on the disk;
+    /// `prefetchNeighbours` is what keeps them warm.
+    func cachedImages(forSpreadAt index: Int) -> [NSImage]? {
+        let urls = orderedPages(forSpreadAt: index).map(\.url)
+        guard !urls.isEmpty else { return nil }
+        let images = urls.compactMap { cache.cached($0) }
+        return images.count == urls.count ? images : nil
+    }
+
+    /// The spread waiting off-screen on the given side, if there is one.
+    func spreadIndex(on side: ScreenSide) -> Int? {
+        neighbouringSpread(
+            from: spreadIndex,
+            on: side,
+            direction: direction,
+            spreadCount: spreads.count
+        )
     }
 
     /// e.g. "12–11 / 84", matching the on-screen left-to-right order.
@@ -216,7 +234,9 @@ final class ReaderModel {
     }
 
     private func prefetchNeighbours() {
-        let neighbours = [spreadIndex + 1, spreadIndex - 1, spreadIndex + 2]
+        // Both sides, two deep: the strip can be asked for either neighbour at
+        // any moment, and which one is "next" flips with the reading direction.
+        let neighbours = [spreadIndex + 1, spreadIndex - 1, spreadIndex + 2, spreadIndex - 2]
             .filter { spreads.indices.contains($0) }
             .flatMap { spreads[$0].pageIndices }
             .map { pages[$0] }
