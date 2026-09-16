@@ -4,6 +4,7 @@ import Observation
 import UniformTypeIdentifiers
 import ComicArchive
 import PageSearch
+import PageCapture
 
 extension ReadingDirection {
     /// How the direction is named in the menu. The enum itself lives in
@@ -37,6 +38,10 @@ final class ReaderModel {
     private(set) var textIndex: PageTextIndex?
     /// Set by ⌘F; the reader opens the controls panel and focuses the field.
     var wantsSearchFocus = false
+    /// Capture mode: clicks and drags on a page save it for the editor.
+    var isCapturing = false
+    /// "Saved Berserk v01 p119 panel6.png · citation copied", briefly.
+    var lastCaptureMessage: String?
     var searchQuery = "" {
         didSet { if searchQuery != oldValue { scheduleSearch() } }
     }
@@ -50,6 +55,8 @@ final class ReaderModel {
             guard spreadIndex != oldValue else { return }
             saveProgress()
             prefetchNeighbours()
+            // Turning the page means you're done capturing from this one.
+            isCapturing = false
         }
     }
 
@@ -68,6 +75,7 @@ final class ReaderModel {
     @ObservationIgnored private var indexingTask: Task<Void, Never>?
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private let indexStore = TextIndexStore()
+    @ObservationIgnored private var detectedPanels: [URL: [CGRect]] = [:]
 
     private static let directionKey = "PanelsReadingDirection"
 
@@ -160,6 +168,8 @@ final class ReaderModel {
     }
 
     func closeComic() {
+        isCapturing = false
+        detectedPanels = [:]
         indexingTask?.cancel()
         indexingTask = nil
         textIndex = nil
@@ -309,6 +319,119 @@ final class ReaderModel {
         pasteboard.clearContents()
         pasteboard.setString(citation, forType: .string)
         return citation
+    }
+
+    // MARK: - Capturing for the editor
+
+    private static let capturesRootKey = "PanelsCapturesRoot"
+
+    /// Where captures go: `<root>/<Series>/`. The root is
+    /// ~/Documents/Panels Captures unless the reader chose another.
+    var capturesRoot: URL {
+        get {
+            if let path = UserDefaults.standard.string(forKey: Self.capturesRootKey) {
+                return URL(fileURLWithPath: path, isDirectory: true)
+            }
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+                ?? FileManager.default.homeDirectoryForCurrentUser
+            return documents.appendingPathComponent("Panels Captures", isDirectory: true)
+        }
+        set { UserDefaults.standard.set(newValue.path, forKey: Self.capturesRootKey) }
+    }
+
+    var capturesFolder: URL? {
+        guard let source else { return nil }
+        return capturesRoot.appendingPathComponent(ComicIdentity(fileURL: source).series, isDirectory: true)
+    }
+
+    func toggleCapture() {
+        guard hasComic else { return }
+        isCapturing.toggle()
+    }
+
+    func chooseCapturesRoot() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.message = "Choose where captured panels are saved"
+        panel.prompt = "Use This Folder"
+        panel.directoryURL = capturesRoot
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        capturesRoot = url
+    }
+
+    func revealCapturesFolder() {
+        let folder = capturesFolder ?? capturesRoot
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
+    }
+
+    /// Panels on a page, detected once and kept for the life of the comic.
+    func panels(on pageURL: URL) async -> [CGRect] {
+        if let known = detectedPanels[pageURL] { return known }
+        let rightToLeft = direction == .rightToLeft
+        let found = await Task.detached(priority: .userInitiated) {
+            PanelDetector.panels(in: pageURL, rightToLeft: rightToLeft)
+        }.value
+        detectedPanels[pageURL] = found
+        return found
+    }
+
+    /// Saves a panel, a dragged region (`panel` nil) or, with no rect, the
+    /// whole page — at native resolution, named and tagged with its citation —
+    /// then puts the citation on the clipboard.
+    func capture(page pageURL: URL, unitRect: CGRect?, panel: Int?) {
+        guard let source, let folder = capturesFolder,
+              let pageIndex = pageIndexByURL[pageURL]
+        else { return }
+        let identity = ComicIdentity(fileURL: source)
+        let pageNumber = pageIndex + 1
+        let citation = identity.citation(pages: [pageNumber], panel: panel)
+        let kind: CaptureRecord.Kind = unitRect == nil ? .page : (panel == nil ? .region : .panel)
+        let record = CaptureRecord(
+            kind: kind, series: identity.series, volume: identity.volume, chapter: identity.chapter,
+            pages: [pageNumber], panel: panel, region: unitRect, citation: citation,
+            source: source.lastPathComponent, file: ""
+        )
+        let writer = CaptureWriter(folder: folder)
+
+        Task {
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
+                do {
+                    let image = try PageCropper.crop(pageURL, unitRect: unitRect)
+                    let written = try writer.write(image, record: record)
+                    // The whole page goes alongside, once, so the editor can
+                    // reframe without ever opening the comic.
+                    if kind != .page, !writer.hasPage(for: record) {
+                        var page = record
+                        page.kind = .page; page.panel = nil; page.region = nil
+                        page.citation = identity.citation(pages: [pageNumber])
+                        try writer.write(try PageCropper.crop(pageURL, unitRect: nil), record: page)
+                    }
+                    return .success(written.file)
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+
+            switch outcome {
+            case .success(let file):
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(citation, forType: .string)
+                lastCaptureMessage = "Saved \(file) · citation copied"
+            case .failure(let error):
+                lastCaptureMessage = "Couldn’t save the capture: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// The page or pages on screen, whole.
+    func captureVisiblePages() {
+        for page in visiblePages {
+            capture(page: page.url, unitRect: nil, panel: nil)
+        }
     }
 
     // MARK: - Text search

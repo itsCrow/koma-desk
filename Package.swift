@@ -16,9 +16,12 @@ let package = Package(
         // Reading the lettering off pages and searching it. No UI, so it can
         // be tested on its own.
         .target(name: "PageSearch"),
+        // Finding panels on a page and saving them for an editor. No UI.
+        .target(name: "PageCapture"),
         // The SwiftUI reader.
-        .executableTarget(name: "Panels", dependencies: ["ComicArchive", "PageSearch"]),
+        .executableTarget(name: "Panels", dependencies: ["ComicArchive", "PageSearch", "PageCapture"]),
         .testTarget(name: "ComicArchiveTests", dependencies: ["ComicArchive"]),
         .testTarget(name: "PageSearchTests", dependencies: ["PageSearch", "ComicArchive"]),
+        .testTarget(name: "PageCaptureTests", dependencies: ["PageCapture", "ComicArchive"]),
     ]
 )

@@ -120,9 +120,10 @@ public struct ComicIdentity: Equatable, Sendable {
 // MARK: - Citation
 
 extension ComicIdentity {
-    /// A compact citation of the given page(s): "Berserk, Vol. 1, p. 117" or
-    /// "Dragon Ball + Super, Ch. 52, pp. 4–5".
-    public func citation(pages: [Int]) -> String {
+    /// A compact citation of the given page(s): "Berserk, Vol. 1, p. 117",
+    /// "Dragon Ball + Super, Ch. 52, pp. 4–5", or with a panel,
+    /// "Berserk, Vol. 1, p. 117, panel 3".
+    public func citation(pages: [Int], panel: Int? = nil) -> String {
         var parts = [series]
         if let volume { parts.append("Vol. \(volume)") }
         if let chapter { parts.append("Ch. \(chapter)") }
@@ -130,6 +131,7 @@ extension ComicIdentity {
         if let first = sorted.first, let last = sorted.last {
             parts.append(first == last ? "p. \(first)" : "pp. \(first)–\(last)")
         }
+        if let panel { parts.append("panel \(panel)") }
         return parts.joined(separator: ", ")
     }
 }

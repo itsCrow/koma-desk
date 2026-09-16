@@ -34,6 +34,18 @@ struct PanelsApp: App {
                     .disabled(!model.hasComic)
             }
 
+            CommandMenu("Tools") {
+                Button(model.isCapturing ? "Stop Capturing" : "Capture Panel") { model.toggleCapture() }
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .disabled(!model.hasComic)
+                Button("Capture Page") { model.captureVisiblePages() }
+                    .keyboardShortcut("p", modifiers: [.command, .shift, .option])
+                    .disabled(!model.hasComic)
+                Divider()
+                Button("Set Captures Folder…") { model.chooseCapturesRoot() }
+                Button("Reveal Captures Folder") { model.revealCapturesFolder() }
+            }
+
             CommandMenu("Go") {
                 Button("Find in Comic…") { model.requestSearch() }
                     .keyboardShortcut("f")

@@ -18,6 +18,20 @@ final class SpreadScrollView: NSScrollView {
 
     weak var swipeCoordinator: SpreadStripView?
 
+    typealias CaptureHandlers = (
+        panels: @MainActor (URL) async -> [CGRect],
+        capture: (URL, CGRect?, Int?) -> Void
+    )
+    var captureHandlers: CaptureHandlers? {
+        didSet { pageView.captureHandlers = captureHandlers }
+    }
+    private(set) var isCapturing = false
+
+    func setCapturing(_ capturing: Bool) {
+        isCapturing = capturing
+        pageView.setCapturing(capturing)
+    }
+
     private let pageView = SpreadDocumentView()
     /// Whether the page sits at its fitted scale — true until the reader zooms
     /// it. Tracked outright rather than inferred from magnification, because
@@ -132,7 +146,8 @@ final class SpreadScrollView: NSScrollView {
     override func mouseUp(with event: NSEvent) {
         defer { mouseDownPoint = nil }
         super.mouseUp(with: event)
-        guard let start = mouseDownPoint, event.clickCount == 1 else { return }
+        // In capture mode a click is a capture (or nothing), never a tap.
+        guard !isCapturing, let start = mouseDownPoint, event.clickCount == 1 else { return }
         let end = event.locationInWindow
         guard hypot(end.x - start.x, end.y - start.y) < 4 else { return }
         swipeCoordinator?.onTap?()
@@ -233,6 +248,14 @@ private final class SpreadDocumentView: NSView {
     /// selected and copied like text anywhere else on the Mac.
     private var liveTextViews: [ImageAnalysisOverlayView] = []
     private var analysisTasks: [Task<Void, Never>] = []
+    /// One per page, topmost: takes clicks and drags as captures while the
+    /// reader is capturing, and stays out of the way otherwise.
+    private var captureViews: [CaptureOverlayView] = []
+    private var pageURLs: [URL] = []
+    private var isCapturing = false
+    var captureHandlers: SpreadScrollView.CaptureHandlers? {
+        didSet { captureViews.forEach { $0.handlers = captureHandlers } }
+    }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
@@ -246,11 +269,13 @@ private final class SpreadDocumentView: NSView {
 
     func show(_ images: [NSImage], urls: [URL] = []) {
         self.images = images
+        self.pageURLs = urls
         analysisTasks.forEach { $0.cancel() }
         analysisTasks = []
         imageViews.forEach { $0.removeFromSuperview() }
         highlightViews.forEach { $0.removeFromSuperview() }
         liveTextViews.forEach { $0.removeFromSuperview() }
+        captureViews.forEach { $0.removeFromSuperview() }
         imageViews = images.map { image in
             let view = NSImageView()
             view.image = image
@@ -273,7 +298,15 @@ private final class SpreadDocumentView: NSView {
             addSubview(overlay)
             return overlay
         }
+        captureViews = images.indices.map { index in
+            let overlay = CaptureOverlayView()
+            overlay.pageURL = urls.indices.contains(index) ? urls[index] : nil
+            overlay.handlers = captureHandlers
+            addSubview(overlay)
+            return overlay
+        }
         setHighlights(pendingHighlights)
+        setCapturing(isCapturing)
         frame = NSRect(origin: .zero, size: Self.naturalSize(of: images))
         needsLayout = true
 
@@ -289,6 +322,11 @@ private final class SpreadDocumentView: NSView {
                 overlay.analysis = analysis
             })
         }
+    }
+
+    func setCapturing(_ capturing: Bool) {
+        isCapturing = capturing
+        captureViews.forEach { $0.isActive = capturing }
     }
 
     /// Boxes per page, aligned with `images`. Kept if the pages haven't been
@@ -308,6 +346,7 @@ private final class SpreadDocumentView: NSView {
             imageViews[index].frame = frame
             highlightViews[index].frame = frame
             liveTextViews[index].frame = frame
+            captureViews[index].frame = frame
             x += width
         }
     }
@@ -350,6 +389,147 @@ final class LiveTextAnalyses: @unchecked Sendable {
         else { return nil }
         if let url { cache.setObject(analysis, forKey: url as NSURL) }
         return analysis
+    }
+}
+
+/// Capture mode on one page: shows the detected panels, tints the one under
+/// the mouse, and turns a click into a panel capture or a drag into a region
+/// capture. Inert — invisible and untouchable — when not active, so Live Text
+/// and paging behave as usual.
+private final class CaptureOverlayView: NSView {
+    var pageURL: URL?
+    var handlers: SpreadScrollView.CaptureHandlers?
+
+    var isActive = false {
+        didSet {
+            guard isActive != oldValue else { return }
+            hovered = nil
+            marquee = nil
+            if isActive { detectPanels() } else { detection?.cancel() }
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+        }
+    }
+
+    private var panels: [CGRect] = []
+    private var detection: Task<Void, Never>?
+    private var hovered: Int?
+    private var dragStart: NSPoint?
+    private var marquee: NSRect?
+    private var tracking: NSTrackingArea?
+
+    override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        isActive && bounds.contains(convert(point, from: superview)) ? self : nil
+    }
+
+    override func resetCursorRects() {
+        if isActive { addCursorRect(bounds, cursor: .crosshair) }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    private func detectPanels() {
+        detection?.cancel()
+        guard let pageURL, let handlers else { return }
+        detection = Task { @MainActor [weak self] in
+            let found = await handlers.panels(pageURL)
+            guard let self, !Task.isCancelled, self.isActive else { return }
+            self.panels = found
+            self.needsDisplay = true
+        }
+    }
+
+    // MARK: Mouse
+
+    private func unit(_ point: NSPoint) -> CGPoint {
+        CGPoint(x: point.x / bounds.width, y: point.y / bounds.height)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard isActive, dragStart == nil else { return }
+        let p = unit(convert(event.locationInWindow, from: nil))
+        let index = panels.firstIndex { $0.contains(p) }
+        if index != hovered { hovered = index; needsDisplay = true }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if hovered != nil { hovered = nil; needsDisplay = true }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isActive else { return super.mouseDown(with: event) }
+        dragStart = convert(event.locationInWindow, from: nil)
+        marquee = nil
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isActive, let start = dragStart else { return }
+        let now = convert(event.locationInWindow, from: nil)
+        marquee = NSRect(x: min(start.x, now.x), y: min(start.y, now.y),
+                         width: abs(now.x - start.x), height: abs(now.y - start.y))
+            .intersection(bounds)
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isActive, let start = dragStart, let pageURL else { return }
+        defer { dragStart = nil; marquee = nil; needsDisplay = true }
+        let end = convert(event.locationInWindow, from: nil)
+
+        if hypot(end.x - start.x, end.y - start.y) < 4 {
+            // A click: the panel under it, if there is one.
+            let p = unit(end)
+            guard let index = panels.firstIndex(where: { $0.contains(p) }) else { return }
+            handlers?.capture(pageURL, panels[index], index + 1)
+        } else if let marquee, marquee.width > 8, marquee.height > 8 {
+            let rect = CGRect(x: marquee.minX / bounds.width, y: marquee.minY / bounds.height,
+                              width: marquee.width / bounds.width, height: marquee.height / bounds.height)
+            handlers?.capture(pageURL, rect, nil)
+        }
+    }
+
+    // MARK: Drawing
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isActive else { return }
+        let size = bounds.size
+        func rect(_ unit: CGRect) -> NSRect {
+            NSRect(x: unit.minX * size.width, y: unit.minY * size.height,
+                   width: unit.width * size.width, height: unit.height * size.height)
+        }
+        let accent = NSColor.controlAccentColor
+        let line = max(size.height * 0.0015, 1)
+
+        for (index, panel) in panels.enumerated() {
+            let path = NSBezierPath(rect: rect(panel))
+            path.lineWidth = line
+            if index == hovered {
+                accent.withAlphaComponent(0.22).setFill()
+                path.fill()
+                accent.setStroke()
+                path.lineWidth = line * 2
+            } else {
+                accent.withAlphaComponent(0.55).setStroke()
+            }
+            path.stroke()
+        }
+
+        if let marquee {
+            let path = NSBezierPath(rect: marquee)
+            NSColor.white.withAlphaComponent(0.18).setFill()
+            path.fill()
+            NSColor.white.setStroke()
+            path.lineWidth = line * 2
+            path.stroke()
+        }
     }
 }
 

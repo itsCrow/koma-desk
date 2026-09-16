@@ -61,6 +61,7 @@ struct ReaderControlsPanel: View {
                         .padding(.trailing, 6)
                         .transition(.opacity)
                 }
+                cornerButton("crop", help: "Capture Panel") { model.toggleCapture() }
                 cornerButton("quote.opening", help: "Copy Citation") { copyCitation() }
                 cornerButton("arrow.up.left.and.arrow.down.right", help: "Full Screen") {
                     NSApp.keyWindow?.toggleFullScreen(nil)

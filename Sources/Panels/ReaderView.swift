@@ -9,6 +9,7 @@ struct ReaderView: View {
     /// enough to find the balloon, then fade. A page turn ends it early.
     @State private var lingeringHighlights = false
     @State private var lingerTask: Task<Void, Never>?
+    @State private var captureFlashTask: Task<Void, Never>?
     @State private var isDropTargeted = false
     @FocusState private var focused: Bool
 
@@ -40,8 +41,17 @@ struct ReaderView: View {
         .onKeyPress(.rightArrow) { model.pressedRightArrow(); return .handled }
         .onKeyPress(.home) { model.goToStart(); return .handled }
         .onKeyPress(.end) { model.goToEnd(); return .handled }
+        .onKeyPress(KeyEquivalent("c")) {
+            guard !showsControls else { return .ignored }
+            model.toggleCapture()
+            return .handled
+        }
         .onKeyPress(.escape) {
-            // A search clears first; the panel goes on the next press.
+            // Capture mode ends first, then a search clears, then the panel goes.
+            if model.isCapturing {
+                model.isCapturing = false
+                return .handled
+            }
             if model.isSearching {
                 model.searchQuery = ""
                 return .handled
@@ -52,6 +62,19 @@ struct ReaderView: View {
         }
         .onChange(of: model.wantsSearchFocus) { _, wants in
             if wants { setControls(visible: true) }
+        }
+        .onChange(of: model.isCapturing) { _, capturing in
+            // Capturing is done on the bare page.
+            if capturing { setControls(visible: false); focused = true }
+        }
+        .onChange(of: model.lastCaptureMessage) { _, message in
+            guard message != nil else { return }
+            captureFlashTask?.cancel()
+            captureFlashTask = Task {
+                try? await Task.sleep(for: .seconds(2.5))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.3)) { model.lastCaptureMessage = nil }
+            }
         }
         .onChange(of: model.spreadIndex) {
             // Turning the page with the panel closed means you've moved on.
@@ -97,6 +120,9 @@ struct ReaderView: View {
             spreadIndex: model.spreadIndex,
             direction: model.direction,
             highlights: highlightsOnPages,
+            isCapturing: model.isCapturing,
+            panelsProvider: { url in await model.panels(on: url) },
+            onCapture: { url, rect, panel in model.capture(page: url, unitRect: rect, panel: panel) },
             // Swiping or zooming the pages means the reader is reading again.
             onInteraction: { setControls(visible: false) },
             onTap: { focused = true; setControls(visible: !showsControls) }
@@ -139,11 +165,37 @@ struct ReaderView: View {
             }
         }
         .overlay(alignment: .top) {
-            if let warning = model.warning {
-                WarningBanner(text: warning)
-                    .padding(.top, 12)
+            VStack(spacing: 8) {
+                if let warning = model.warning {
+                    WarningBanner(text: warning)
+                }
+                if model.isCapturing {
+                    Label("Click a panel or drag a region · Esc when done", systemImage: "crop")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .glassPanel(cornerRadius: 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .padding(.top, 12)
+            .animation(.easeOut(duration: 0.2), value: model.isCapturing)
+        }
+        .overlay(alignment: .bottom) {
+            if let message = model.lastCaptureMessage {
+                Text(message)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .glassPanel(cornerRadius: 12)
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .animation(.easeOut(duration: 0.2), value: model.lastCaptureMessage)
     }
 
     private func setControls(visible: Bool) {

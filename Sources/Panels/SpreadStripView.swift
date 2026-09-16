@@ -12,6 +12,11 @@ struct SpreadStrip: NSViewRepresentable {
     let direction: ReadingDirection
     /// Search hits to draw over each page, keyed by page file.
     let highlights: [URL: [CGRect]]
+    /// Capture mode: pages take clicks and drags as captures.
+    let isCapturing: Bool
+    let panelsProvider: @MainActor (URL) async -> [CGRect]
+    /// A capture: page, unit rect (nil = whole page), panel number (nil = region).
+    let onCapture: (URL, CGRect?, Int?) -> Void
     /// Called as the reader pans, zooms or swipes.
     let onInteraction: () -> Void
     /// A plain click on a page — not a drag, not a swipe.
@@ -22,6 +27,9 @@ struct SpreadStrip: NSViewRepresentable {
         strip.onInteraction = onInteraction
         strip.onTap = onTap
         strip.highlights = highlights
+        strip.panelsProvider = panelsProvider
+        strip.onCapture = onCapture
+        strip.isCapturing = isCapturing
         strip.synchronise(with: model)
         return strip
     }
@@ -30,6 +38,9 @@ struct SpreadStrip: NSViewRepresentable {
         strip.onInteraction = onInteraction
         strip.onTap = onTap
         strip.highlights = highlights
+        strip.panelsProvider = panelsProvider
+        strip.onCapture = onCapture
+        strip.isCapturing = isCapturing
         strip.synchronise(with: model)
     }
 }
@@ -39,6 +50,14 @@ struct SpreadStrip: NSViewRepresentable {
 final class SpreadStripView: NSView {
     var onInteraction: (() -> Void)?
     var onTap: (() -> Void)?
+    var panelsProvider: (@MainActor (URL) async -> [CGRect])?
+    var onCapture: ((URL, CGRect?, Int?) -> Void)?
+    var isCapturing = false {
+        didSet {
+            guard isCapturing != oldValue else { return }
+            for panel in [leftPanel, centrePanel, rightPanel] { panel?.setCapturing(isCapturing) }
+        }
+    }
     var highlights: [URL: [CGRect]] = [:] {
         didSet {
             guard highlights != oldValue else { return }
@@ -183,6 +202,11 @@ final class SpreadStripView: NSView {
         panel.swipeCoordinator = self
         panel.onInteraction = { [weak self] in self?.onInteraction?() }
         panel.setHighlights(highlights)
+        panel.captureHandlers = (
+            panels: { [weak self] url in await self?.panelsProvider?(url) ?? [] },
+            capture: { [weak self] url, rect, index in self?.onCapture?(url, rect, index) }
+        )
+        panel.setCapturing(isCapturing)
         addSubview(panel)
 
         if let images = model.cachedImages(forSpreadAt: index) {
