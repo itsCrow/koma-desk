@@ -81,7 +81,7 @@ struct PanelsApp: App {
                 Button("Body Text") { model.format(.body) }
                     .keyboardShortcut("0", modifiers: [.command, .option])
                     .disabled(model.project == nil)
-                Button("Note to Editor") { model.format(.note) }
+                Button(model.isWritingNote ? "End Note" : "Note to Editor") { model.toggleNote() }
                     .keyboardShortcut("n")
                     .disabled(model.project == nil)
                 Divider()

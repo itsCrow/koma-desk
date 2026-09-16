@@ -111,6 +111,8 @@ final class ReaderModel {
     /// The block of writing the cursor sits in, reported by the editor — what
     /// makes one key both start a range and end it.
     var spanAtCursor: String?
+    /// Whether the cursor is in a note, so ⌘N can end one as well as start it.
+    var isWritingNote = false
     /// Whether the script pane is shown when a project is open.
     var showsScript: Bool {
         didSet { UserDefaults.standard.set(showsScript, forKey: Self.showsScriptKey) }
@@ -816,6 +818,11 @@ final class ReaderModel {
 
     func format(_ command: ScriptCommand) {
         project?.pendingCommand = command
+    }
+
+    /// One key does both: make this line a note, or turn it back into script.
+    func toggleNote() {
+        format(isWritingNote ? .body : .note)
     }
 
     /// Records a citation of the open item in the project and queues its

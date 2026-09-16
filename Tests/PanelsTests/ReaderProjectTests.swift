@@ -691,6 +691,62 @@ struct ReaderProjectTests {
         #expect(project.notesInScriptOrder.isEmpty)
     }
 
+    @Test("A note ends on an empty line, or on the same key that started it")
+    func leavingANote() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "Goku's training begins.", in: scratch)
+        let model = scratch.model
+
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        textView.insertText("\nHold this panel a beat.", replacementRange: textView.selectedRange())
+        let noteLine = (textView.string as NSString).range(of: "Hold this panel a beat.")
+        textView.setSelectedRange(NSRange(location: noteLine.location, length: 0))
+        coordinator.apply(.note)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(model.isWritingNote)
+
+        // Return at the end of a note with words in it carries the note on:
+        // what gets typed next is still part of the aside.
+        textView.setSelectedRange(NSRange(location: noteLine.location + noteLine.length, length: 0))
+        let carriesOn = coordinator.textView(textView, shouldChangeTextIn: textView.selectedRange(),
+                                             replacementString: "\n")
+        #expect(carriesOn)
+        textView.insertText("\n", replacementRange: textView.selectedRange())
+        textView.insertText("And a second line of it.", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).map(\.isNote) == [false, true, true])
+
+        // Return at the end of that, leaving an empty note line...
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        textView.insertText("\n", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        coordinator.publishSpanAtCursor()
+        #expect(model.isWritingNote)
+
+        // ...and Return again lets go of the note instead of making another.
+        let letsGo = coordinator.textView(textView, shouldChangeTextIn: textView.selectedRange(),
+                                          replacementString: "\n")
+        #expect(!letsGo)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).map(\.isNote) == [false, true, true, false])
+        #expect(!model.isWritingNote)
+
+        // And the same key that starts a note ends one.
+        textView.setSelectedRange(NSRange(location: noteLine.location, length: 0))
+        coordinator.publishSpanAtCursor()
+        coordinator.publishSpanAtCursor()
+        #expect(model.isWritingNote)
+        model.toggleNote()
+        #expect(project.pendingCommand == .body)
+        project.pendingCommand = nil
+        coordinator.apply(.body)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(!model.isWritingNote)
+        model.toggleNote()
+        #expect(project.pendingCommand == .note)
+    }
+
     @Test("A block's label says the pages, and the chapter only when it differs")
     func spanLabelText() throws {
         let scratch = try Scratch()

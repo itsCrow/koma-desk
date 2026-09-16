@@ -405,6 +405,7 @@ struct ScriptEditorView: NSViewRepresentable {
             }
             textView.didChangeText()
             textView.typingAttributes = attributes
+            publishSpanAtCursor()
         }
 
         /// Puts a page range on the writing, takes one off, or stops one here.
@@ -446,10 +447,30 @@ struct ScriptEditorView: NSViewRepresentable {
         func publishSpanAtCursor() {
             let id = textView?.typingAttributes[ScriptStyle.spanKey] as? String
             if model.spanAtCursor != id { model.spanAtCursor = id }
+            let note = currentStyle() == .note
+            if model.isWritingNote != note { model.isWritingNote = note }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             publishSpanAtCursor()
+        }
+
+        /// Return on an empty note ends it rather than making another one —
+        /// the way a list or a blockquote lets go in every editor.
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
+                      replacementString: String?) -> Bool {
+            guard replacementString == "\n", currentStyle() == .note,
+                  let storage = textView.textStorage
+            else { return true }
+            let string = storage.string as NSString
+            var content = string.paragraphRange(for: affectedCharRange)
+            if content.length > 0, string.character(at: content.location + content.length - 1) == 0x0A {
+                content.length -= 1
+            }
+            // Only when there's nothing in it: a note with words carries on.
+            guard content.length == 0 else { return true }
+            apply(.body)
+            return false
         }
 
         func goToSpan(_ id: String) {
