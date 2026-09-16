@@ -202,7 +202,38 @@ struct ScriptEditorView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard !isLoading else { return }
             rebuildPastedChips()
+            restyleForeignText()
             project.script = serialise()
+        }
+
+        /// Text that arrived with someone else's attributes — a paste that
+        /// slipped past the plain-text preference — is given the script's.
+        private func restyleForeignText() {
+            guard let textView, let storage = textView.textStorage, storage.length > 0 else { return }
+            var ranges: [NSRange] = []
+            storage.enumerateAttribute(ScriptStyle.paragraphKey, in: NSRange(location: 0, length: storage.length), options: []) { value, range, _ in
+                if value == nil { ranges.append(range) }
+            }
+            guard !ranges.isEmpty else { return }
+            isLoading = true
+            storage.beginEditing()
+            for range in ranges {
+                // The paragraph's style, from wherever in it is already styled.
+                let paragraph = (storage.string as NSString).paragraphRange(for: range)
+                var style = ScriptStyle.Paragraph.body
+                storage.enumerateAttribute(ScriptStyle.paragraphKey, in: paragraph, options: []) { value, _, stop in
+                    if let raw = value as? String, let found = ScriptStyle.Paragraph(rawValue: raw) { style = found; stop.pointee = true }
+                }
+                var attributes = ScriptStyle.attributes(for: style)
+                storage.enumerateAttribute(.attachment, in: range, options: []) { value, sub, _ in
+                    attributes[.attachment] = value
+                    attributes[.link] = (value as? CitationAttachment)?.citationID.map { ScriptMarkdown.citationURL(id: $0) }
+                    storage.setAttributes(attributes.compactMapValues { $0 }, range: sub)
+                }
+            }
+            storage.endEditing()
+            isLoading = false
+            textView.typingAttributes = ScriptStyle.attributes(for: currentStyle())
         }
 
         /// Text that came through the pasteboard — a paste, a drag — brings
@@ -401,15 +432,18 @@ final class ScriptTextView: NSTextView {
         [Self.markdownType] + super.writablePasteboardTypes
     }
 
+    /// Our own Markdown first; then plain text ahead of RTF, so anything
+    /// from elsewhere — Live Text off a page, a web page — arrives as words
+    /// in the script's own style, not in its source's black-on-white.
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        [Self.markdownType] + super.readablePasteboardTypes
+        [Self.markdownType, .string] + super.readablePasteboardTypes.filter { $0 != .string }
     }
 
     /// A drop is restricted to these — AppKit's own fixed list, which does not
     /// grow from `readablePasteboardTypes`. Without this the Markdown is on
     /// the pasteboard but never chosen, RTF is, and a chip's RTF is its URL.
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
-        [Self.markdownType] + super.acceptableDragTypes
+        [Self.markdownType, .string] + super.acceptableDragTypes.filter { $0 != .string }
     }
 
     override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
