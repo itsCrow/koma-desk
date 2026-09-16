@@ -185,7 +185,35 @@ struct ScriptEditorView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !isLoading else { return }
+            rebuildPastedChips()
             project.script = serialise()
+        }
+
+        /// Text that came through the pasteboard — a paste, a drag — brings
+        /// its attachments back as plain NSTextAttachments; the citation link
+        /// on them survives, though. Anything like that becomes a chip again.
+        private func rebuildPastedChips() {
+            guard let textView, let storage = textView.textStorage else { return }
+            var replacements: [(NSRange, NSAttributedString)] = []
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length), options: []) { value, range, _ in
+                guard let attachment = value as? NSTextAttachment, !(attachment is CitationAttachment) else { return }
+                let link = storage.attribute(.link, at: range.location, effectiveRange: nil)
+                let url = link as? URL ?? (link as? String).flatMap(URL.init(string:))
+                guard let url, let id = ScriptMarkdown.citationID(from: url) else { return }
+                let style = ScriptStyle.Paragraph(rawValue: storage.attribute(ScriptStyle.paragraphKey, at: range.location, effectiveRange: nil) as? String ?? "") ?? .body
+                let text = project.citation(id: id)?.text ?? "citation"
+                replacements.append((range, chip(id: id, text: text, style: style)))
+            }
+            guard !replacements.isEmpty else { return }
+            let selection = textView.selectedRange()
+            isLoading = true
+            storage.beginEditing()
+            for (range, chip) in replacements.reversed() {
+                storage.replaceCharacters(in: range, with: chip)
+            }
+            storage.endEditing()
+            isLoading = false
+            textView.setSelectedRange(selection)
         }
 
         // MARK: Insertion and formatting
@@ -395,8 +423,34 @@ private final class CitationChipCell: NSTextAttachmentCell {
 
     override func wantsToTrackMouse() -> Bool { true }
 
+    /// A click jumps; a drag picks the chip up and moves it. Which one this
+    /// is only becomes clear once the mouse moves or lets go, so the cell
+    /// follows the mouse itself from here.
+    override func trackMouse(with theEvent: NSEvent, in cellFrame: NSRect, of controlView: NSView?,
+                             atCharacterIndex charIndex: Int, untilMouseUp flag: Bool) -> Bool {
+        guard let textView = controlView as? NSTextView, let window = textView.window else { return true }
+        let start = theEvent.locationInWindow
+        while true {
+            guard let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) else { return true }
+            switch next.type {
+            case .leftMouseUp:
+                // A click: the text view tells its delegate, which jumps.
+                return true
+            case .leftMouseDragged:
+                let travelled = hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y)
+                guard travelled >= 4 else { continue }
+                // A drag: select just the chip and hand it to the text view's
+                // own drag-and-drop, which moves it to wherever it's dropped.
+                textView.setSelectedRange(NSRange(location: charIndex, length: 1))
+                _ = textView.dragSelection(with: next, offset: .zero, slideBack: true)
+                return false
+            default:
+                continue
+            }
+        }
+    }
+
     override func trackMouse(with theEvent: NSEvent, in cellFrame: NSRect, of controlView: NSView?, untilMouseUp flag: Bool) -> Bool {
-        // Report the click; the text view's delegate does the jumping.
         true
     }
 }
