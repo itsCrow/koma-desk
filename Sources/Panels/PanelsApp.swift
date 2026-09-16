@@ -28,6 +28,12 @@ struct PanelsApp: App {
                     .disabled(!model.hasComic)
             }
 
+            CommandGroup(after: .pasteboard) {
+                Button("Copy Citation") { model.copyCitation() }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(!model.hasComic)
+            }
+
             CommandMenu("Go") {
                 Button("Find in Comic…") { model.requestSearch() }
                     .keyboardShortcut("f")

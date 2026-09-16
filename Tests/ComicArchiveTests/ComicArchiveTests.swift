@@ -526,3 +526,55 @@ struct OpenTests {
         }
     }
 }
+
+// MARK: - Identity and citation
+
+@Suite("Comic identity from filenames")
+struct IdentityTests {
+    private func identity(_ path: String) -> ComicIdentity {
+        ComicIdentity(fileURL: URL(fileURLWithPath: path))
+    }
+
+    @Test("A scan-group volume: series, volume and year, tags dropped")
+    func volumeRelease() {
+        let id = identity("/x/Berserk v01 (2003) (Digital) (danke-Empire).cbz")
+        #expect(id.series == "Berserk")
+        #expect(id.volume == 1)
+        #expect(id.year == 2003)
+        #expect(id.chapter == nil)
+    }
+
+    @Test("A chapter file takes its series from the folder, skipping the arc")
+    func chapterFromFolder() {
+        let id = identity("/Users/x/Downloads/Dragon Ball + Super [Complete Manga]/18 Galactic Patrol Prisoner Arc/Chapter 052 - Goku and Vegeta's Training.cbr")
+        #expect(id.series == "Dragon Ball + Super")
+        #expect(id.chapter == 52)
+        #expect(id.chapterTitle == "Goku and Vegeta's Training")
+        #expect(id.volume == nil)
+    }
+
+    @Test("Other common shapes")
+    func otherShapes() {
+        #expect(identity("/x/One Piece Vol. 105.cbz").volume == 105)
+        #expect(identity("/x/One Piece Vol. 105.cbz").series == "One Piece")
+        #expect(identity("/x/One Piece c1044 - Title.cbz").chapter == 1044)
+        #expect(identity("/x/One Piece c1044 - Title.cbz").chapterTitle == "Title")
+        #expect(identity("/x/Akira 03.cbz").volume == 3)
+        #expect(identity("/x/Akira 03.cbz").series == "Akira")
+    }
+
+    @Test("An unparseable name stands as the title, and nothing else is invented")
+    func fallback() {
+        let id = identity("/x/Some Weird Name.cbz")
+        #expect(id.series == "Some Weird Name")
+        #expect(id.volume == nil && id.chapter == nil && id.year == nil)
+    }
+
+    @Test("Citations: volume, chapter, single page, spread")
+    func citations() {
+        #expect(ComicIdentity(series: "Berserk", volume: 1).citation(pages: [117]) == "Berserk, Vol. 1, p. 117")
+        #expect(ComicIdentity(series: "Berserk", volume: 1).citation(pages: [117, 116]) == "Berserk, Vol. 1, pp. 116–117")
+        #expect(ComicIdentity(series: "Dragon Ball + Super", chapter: 52).citation(pages: [4]) == "Dragon Ball + Super, Ch. 52, p. 4")
+        #expect(ComicIdentity(series: "Odd").citation(pages: []) == "Odd")
+    }
+}

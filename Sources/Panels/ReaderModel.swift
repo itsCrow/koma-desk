@@ -293,6 +293,24 @@ final class ReaderModel {
         }
     }
 
+    // MARK: - Citation
+
+    /// "Berserk, Vol. 1, pp. 116–117" for whatever is on screen.
+    var citation: String? {
+        guard let source, hasComic else { return nil }
+        return ComicIdentity(fileURL: source).citation(pages: visiblePages.map(\.number))
+    }
+
+    /// Puts the citation on the clipboard. Returns it, for the confirmation.
+    @discardableResult
+    func copyCitation() -> String? {
+        guard let citation else { return nil }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(citation, forType: .string)
+        return citation
+    }
+
     // MARK: - Text search
 
     var isIndexing: Bool { textIndex.map { !$0.isComplete } ?? false }

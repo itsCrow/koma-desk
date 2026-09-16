@@ -10,6 +10,9 @@ struct ReaderControlsPanel: View {
     /// The panel's height; the reader decides it from the window.
     let height: CGFloat
     @FocusState private var searchFocused: Bool
+    /// Shown for a moment after the citation is copied.
+    @State private var copiedCitation: String?
+    @State private var copiedTask: Task<Void, Never>?
 
     private var thumbnailHeight: CGFloat { height * 0.44 }
     private static let currentScale: CGFloat = 1.28
@@ -49,20 +52,48 @@ struct ReaderControlsPanel: View {
         .onAppear { if model.wantsSearchFocus { takeSearchFocus() } }
         .onChange(of: model.wantsSearchFocus) { _, wants in if wants { takeSearchFocus() } }
         .overlay(alignment: .topTrailing) {
-            Button {
-                NSApp.keyWindow?.toggleFullScreen(nil)
-            } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .frame(width: 34, height: 34)
-                    .contentShape(Rectangle())
+            HStack(spacing: 2) {
+                if let copiedCitation {
+                    Text("Copied “\(copiedCitation)”")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                        .padding(.trailing, 6)
+                        .transition(.opacity)
+                }
+                cornerButton("quote.opening", help: "Copy Citation") { copyCitation() }
+                cornerButton("arrow.up.left.and.arrow.down.right", help: "Full Screen") {
+                    NSApp.keyWindow?.toggleFullScreen(nil)
+                }
             }
-            .buttonStyle(.plain)
             .padding(8)
-            .help("Full Screen")
         }
         .glassPanel(cornerRadius: Self.cornerRadius)
+    }
+
+    // MARK: - Corner tools
+
+    private func cornerButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func copyCitation() {
+        guard let citation = model.copyCitation() else { return }
+        copiedTask?.cancel()
+        withAnimation(.easeOut(duration: 0.15)) { copiedCitation = citation }
+        copiedTask = Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) { copiedCitation = nil }
+        }
     }
 
     // MARK: - Search
