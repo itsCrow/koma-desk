@@ -17,7 +17,7 @@ struct PanelsApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Project…") { model.requestNewProject() }
-                    .keyboardShortcut("n")
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(model.library.isEmpty)
                 Button("Library and Projects…") { model.showsHome = true }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
@@ -82,7 +82,7 @@ struct PanelsApp: App {
                     .keyboardShortcut("0", modifiers: [.command, .option])
                     .disabled(model.project == nil)
                 Button("Note to Editor") { model.format(.note) }
-                    .keyboardShortcut("n", modifiers: [.command, .option])
+                    .keyboardShortcut("n")
                     .disabled(model.project == nil)
                 Divider()
                 Button("Copy Script for Google Docs") { model.copyScriptAsPlainText() }
