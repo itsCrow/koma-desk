@@ -8,14 +8,17 @@ struct ScriptPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 2) {
-                tab("Script", shots: false)
-                tab("Shots", shots: true)
-                Spacer()
+            HStack(spacing: 8) {
+                projectMenu
+                Spacer(minLength: 6)
                 if model.showsShotList {
                     Text("\(project.citationsInScriptOrder.count) shots")
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.5))
+                }
+                HStack(spacing: 2) {
+                    tab("Script", shots: false)
+                    tab("Shots", shots: true)
                 }
             }
             .padding(.horizontal, 10)
@@ -35,6 +38,45 @@ struct ScriptPaneView: View {
                 }
             }
         }
+    }
+
+    /// The project's name, and a way to any other.
+    private var projectMenu: some View {
+        Menu {
+            ForEach(model.library.groupedBySeries, id: \.series) { group in
+                Section(group.series) {
+                    ForEach(group.projects) { summary in
+                        Button {
+                            model.switchTo(summary.url)
+                        } label: {
+                            if summary.url == project.url {
+                                Label(summary.name, systemImage: "checkmark")
+                            } else {
+                                Text(summary.name)
+                            }
+                        }
+                        .disabled(summary.url == project.url)
+                    }
+                }
+            }
+            Divider()
+            Button("New Project…") { model.requestNewProject() }
+            Button("All Projects…") { model.showsProjects = true }
+        } label: {
+            HStack(spacing: 5) {
+                Text(project.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .foregroundStyle(.white)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Switch project")
     }
 
     private func tab(_ title: String, shots: Bool) -> some View {

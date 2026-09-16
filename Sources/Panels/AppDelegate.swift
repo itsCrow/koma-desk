@@ -30,6 +30,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A project dropped into the shared folder from Finder shows up when the
+    /// app comes to the front.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            ReaderModel.shared.library.refresh()
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             ReaderModel.shared.closeProject()

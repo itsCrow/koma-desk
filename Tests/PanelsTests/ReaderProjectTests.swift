@@ -30,6 +30,104 @@ struct ReaderProjectTests {
         return condition()
     }
 
+    static func scratchLibrary() throws -> (ProjectLibrary, URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-library-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let defaults = UserDefaults(suiteName: "PanelsTests-\(UUID().uuidString)")!
+        return (ProjectLibrary(root: root, defaults: defaults), root)
+    }
+
+    @Test("The library groups projects by series and puts the newest first")
+    func libraryGrouping() throws {
+        let (library, root) = try Self.scratchLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        func make(_ name: String, series: String?, title: String, editedSecondsAgo: Double) throws {
+            let url = try library.create(named: name)
+            var loaded = try ProjectStore.load(url)
+            if let series {
+                loaded.manifest.comics = [ComicRef(title: title, path: "/x/\(title).cbz", filename: "\(title).cbz", fileSize: 1, series: series)]
+            }
+            try ProjectStore.save(loaded, to: url)
+            let date = Date().addingTimeInterval(-editedSecondsAgo)
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: ProjectStore.scriptURL(of: url).path)
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: ProjectStore.manifestURL(of: url).path)
+        }
+        try make("Eclipse", series: "Berserk", title: "Berserk v13", editedSecondsAgo: 100)
+        try make("Golden Age", series: "Berserk", title: "Berserk v04", editedSecondsAgo: 3000)
+        try make("Buu Saga", series: "Dragon Ball", title: "Chapter 467", editedSecondsAgo: 500)
+        try make("Nothing yet", series: nil, title: "", editedSecondsAgo: 9000)
+        library.refresh()
+
+        let groups = library.groupedBySeries
+        #expect(groups.map(\.series) == ["Berserk", "Dragon Ball", ProjectLibrary.unsortedSeries])
+        #expect(groups[0].projects.map(\.name) == ["Eclipse", "Golden Age"])
+        #expect(groups[1].projects.map(\.name) == ["Buu Saga"])
+        #expect(library.summary(for: groups[0].projects[0].url)?.comics == ["Berserk v13"])
+    }
+
+    @Test("Rename, duplicate and trash keep the folder and the list in step")
+    func libraryEdits() throws {
+        let (library, root) = try Self.scratchLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let url = try library.create(named: "Draft")
+        #expect(library.summaries.map(\.name) == ["Draft"])
+
+        let renamed = try library.rename(url, to: "Final")
+        #expect(renamed.lastPathComponent == "Final.panelsproject")
+        #expect(try ProjectStore.loadManifest(renamed).name == "Final")
+        #expect(library.summaries.map(\.name) == ["Final"])
+
+        let copy = try library.duplicate(renamed)
+        #expect(copy.lastPathComponent == "Final copy.panelsproject")
+        #expect(Set(library.summaries.map(\.name)) == ["Final", "Final copy"])
+
+        try library.trash(copy)
+        #expect(library.summaries.map(\.name) == ["Final"])
+    }
+
+    @Test("Switching between two projects on the same comic changes the script, not the pages")
+    func switching() async throws {
+        guard let path = Self.comicPath else {
+            withKnownIssue("Set PANELS_TEST_CBR to run.") { Issue.record("skipped") }
+            return
+        }
+        let (library, root) = try Self.scratchLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = ReaderModel(library: library)
+        model.open(URL(fileURLWithPath: path))
+        #expect(await Self.wait { model.hasComic })
+        let comic = URL(fileURLWithPath: path)
+
+        // Two scripts about the one comic.
+        model.newProject(named: "First")
+        let first = try #require(model.project)
+        #expect(first.manifest.comics.count == 1)
+        #expect(first.manifest.comics[0].series == "Berserk")
+        first.script = "The first script."
+        model.goTo(spread: 7)
+
+        model.newProject(named: "Second")
+        let second = try #require(model.project)
+        #expect(second.name == "Second")
+        #expect(second.manifest.comics.count == 1)
+        #expect(model.spreadIndex == 7)
+        // The first was saved on the way out.
+        #expect(try ProjectStore.load(first.url).script == "The first script.")
+
+        // Back to the first: same comic, so the pages don't move.
+        model.switchTo(first.url)
+        #expect(model.project?.name == "First")
+        #expect(model.project?.script == "The first script.")
+        #expect(model.spreadIndex == 7)
+        #expect(model.hasComic)
+        _ = comic
+        #expect(library.summaries.map(\.name).sorted() == ["First", "Second"])
+        model.closeProject()
+    }
+
     @Test("Citing puts a citation in the project, queues its chip, and can be jumped to")
     func citeAndJump() async throws {
         guard let path = Self.comicPath else {

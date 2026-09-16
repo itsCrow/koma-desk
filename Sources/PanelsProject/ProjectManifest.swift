@@ -10,13 +10,19 @@ public struct ComicRef: Codable, Equatable, Sendable, Identifiable {
     public var path: String
     public var filename: String
     public var fileSize: Int
+    /// The series the comic belongs to — "Berserk", "Dragon Ball + Super" —
+    /// recorded when it joins a project so projects can be grouped without
+    /// re-reading filenames. Older manifests don't have it.
+    public var series: String?
 
-    public init(id: String = ProjectManifest.makeID(), title: String, path: String, filename: String, fileSize: Int) {
+    public init(id: String = ProjectManifest.makeID(), title: String, path: String, filename: String,
+                fileSize: Int, series: String? = nil) {
         self.id = id
         self.title = title
         self.path = path
         self.filename = filename
         self.fileSize = fileSize
+        self.series = series
     }
 }
 

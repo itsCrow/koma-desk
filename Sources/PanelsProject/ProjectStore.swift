@@ -19,6 +19,46 @@ public enum ProjectStore {
     public static func scriptURL(of project: URL) -> URL { project.appendingPathComponent("script.md") }
     public static func capturesFolder(of project: URL) -> URL { project.appendingPathComponent("captures", isDirectory: true) }
 
+    /// Every project directly inside `root`, in no particular order.
+    public static func list(in root: URL) -> [URL] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return entries.filter {
+            $0.pathExtension == packageExtension
+                && (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                && FileManager.default.fileExists(atPath: manifestURL(of: $0).path)
+        }
+    }
+
+    /// Just the manifest — enough to describe a project without its script.
+    public static func loadManifest(_ url: URL) throws -> ProjectManifest {
+        try decoder.decode(ProjectManifest.self, from: Data(contentsOf: manifestURL(of: url)))
+    }
+
+    /// A place for a new project called `name` inside `root` that isn't taken:
+    /// "Name.panelsproject", then "Name 2.panelsproject", and so on. Characters
+    /// a folder can't be called are dropped.
+    public static func uniqueURL(named name: String, in root: URL) -> URL {
+        let illegal = CharacterSet(charactersIn: "/:").union(.newlines).union(.controlCharacters)
+        var stem = name.components(separatedBy: illegal).joined().trimmingCharacters(in: .whitespaces)
+        if stem.isEmpty { stem = "Untitled" }
+        var candidate = root.appendingPathComponent(stem).appendingPathExtension(packageExtension)
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = root.appendingPathComponent("\(stem) \(n)").appendingPathExtension(packageExtension)
+            n += 1
+        }
+        return candidate
+    }
+
+    /// When the script was last written — the project's "edited" date.
+    public static func lastEdited(_ url: URL) -> Date? {
+        let script = (try? scriptURL(of: url).resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let manifest = (try? manifestURL(of: url).resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        return [script, manifest].compactMap { $0 }.max()
+    }
+
     /// Makes a new, empty project at `url` (which should end in `.panelsproject`).
     public static func create(at url: URL, name: String) throws -> Loaded {
         try FileManager.default.createDirectory(at: capturesFolder(of: url), withIntermediateDirectories: true)

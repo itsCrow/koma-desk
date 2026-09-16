@@ -16,8 +16,11 @@ struct PanelsApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Project…") { model.newProject() }
+                Button("New Project…") { model.requestNewProject() }
                     .keyboardShortcut("n")
+                Button("Projects…") { model.showsProjects = true }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
+                    .disabled(!model.hasComic && model.project == nil)
                 Button("Open Project…") { model.presentOpenProjectPanel() }
                     .keyboardShortcut("o", modifiers: [.command, .option])
                 Button("Open Comic…") { model.presentOpenPanel() }
@@ -31,6 +34,11 @@ struct PanelsApp: App {
                 Button("Close Comic") { model.closeComic() }
                     .keyboardShortcut("w", modifiers: [.command, .shift])
                     .disabled(!model.hasComic)
+                Divider()
+                Button("Set Projects Folder…") { model.library.chooseRoot() }
+                Button("Reveal Projects Folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([model.library.root])
+                }
             }
 
             CommandMenu("Script") {

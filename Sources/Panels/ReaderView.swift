@@ -61,7 +61,11 @@ struct ReaderView: View {
         }
         .onKeyPress(.escape) {
             guard !model.isScriptEditing else { return .ignored }
-            // Choosing a page, then capture mode, then a search, then the panel.
+            // The browser, then choosing a page, capture mode, a search, the panel.
+            if model.showsProjects, model.hasComic || model.project != nil {
+                withAnimation(.easeOut(duration: 0.2)) { model.showsProjects = false }
+                return .handled
+            }
             if model.isChoosingPageToSave {
                 model.isChoosingPageToSave = false
                 return .handled
@@ -156,8 +160,12 @@ struct ReaderView: View {
 
             if model.hasComic {
                 spread
+            } else if model.project == nil {
+                // Nothing open at all: the projects are the front door.
+                ProjectsBrowserView(model: model, isOverlay: false)
+                    .padding(16)
             } else {
-                EmptyStateView { model.presentOpenPanel() }
+                EmptyStateView(projectName: model.project?.name) { model.presentOpenPanel() }
             }
 
             if model.isLoading {
@@ -258,6 +266,19 @@ struct ReaderView: View {
                     .transition(.opacity)
             }
         }
+        .overlay {
+            if model.showsProjects, model.hasComic || model.project != nil {
+                ZStack {
+                    Color.black.opacity(0.45)
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.showsProjects = false }
+                    ProjectsBrowserView(model: model, isOverlay: true)
+                        .padding(28)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: model.showsProjects)
         .animation(.easeOut(duration: 0.15), value: model.isChoosingPageToSave)
         .overlay(alignment: .bottom) {
             if let message = model.lastCaptureMessage {
@@ -422,6 +443,7 @@ private struct WarningBanner: View {
 }
 
 private struct EmptyStateView: View {
+    var projectName: String? = nil
     let openAction: () -> Void
 
     var body: some View {
@@ -429,7 +451,7 @@ private struct EmptyStateView: View {
             Image(systemName: "books.vertical")
                 .font(.system(size: 52, weight: .thin))
                 .foregroundStyle(.white.opacity(0.5))
-            Text("Open a comic to start reading")
+            Text(projectName.map { "Open a comic to start citing in “\($0)”" } ?? "Open a comic to start reading")
                 .font(.title3)
                 .foregroundStyle(.white.opacity(0.8))
             Text("Drag a .cbr, .cbz or .cb7 file here")

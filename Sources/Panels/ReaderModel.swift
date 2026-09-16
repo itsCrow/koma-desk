@@ -70,6 +70,12 @@ final class ReaderModel {
 
     /// The open project, if any: the script lives beside the pages.
     private(set) var project: Project?
+    /// Every project there is; the browser and the switcher read it.
+    let library: ProjectLibrary
+    /// The projects browser is showing over the reader.
+    var showsProjects = false
+    /// ⌘N: the browser should offer the name field straight away.
+    var wantsNewProject = false
     /// The script pane has the keyboard: every reader key stands down.
     var isScriptEditing = false
     /// Whether the script pane is shown when a project is open.
@@ -134,7 +140,8 @@ final class ReaderModel {
     private static let showsScriptKey = "PanelsShowsScript"
     private static let scriptPlacementKey = "PanelsScriptPlacement"
 
-    init() {
+    init(library: ProjectLibrary = ProjectLibrary()) {
+        self.library = library
         let stored = UserDefaults.standard.string(forKey: Self.directionKey)
         // Defaults to manga order.
         direction = stored.flatMap(ReadingDirection.init(rawValue:)) ?? .rightToLeft
@@ -414,22 +421,75 @@ final class ReaderModel {
 
     // MARK: - Project
 
-    func newProject() {
-        let panel = NSSavePanel()
-        panel.title = "New Project"
-        panel.nameFieldStringValue = (title ?? "Untitled") + ".panelsproject"
-        panel.allowedContentTypes = [.panelsProject]
-        panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, var url = panel.url else { return }
-        if url.pathExtension != ProjectStore.packageExtension {
-            url = url.appendingPathExtension(ProjectStore.packageExtension)
-        }
+    /// ⌘N: bring up the browser with the name field ready.
+    func requestNewProject() {
+        wantsNewProject = true
+        if hasComic || project != nil { showsProjects = true }
+    }
+
+    /// A new project in the projects folder, opened. A comic already on
+    /// screen joins it — that's the natural start of a script about it.
+    func newProject(named name: String) {
         do {
+            let url = try library.create(named: name)
             closeProject()
-            let created = try Project.create(at: url)
-            adopt(created)
+            adopt(try Project.open(url), registeringCurrentComic: true)
+            showsProjects = false
         } catch {
             errorMessage = "Couldn’t create the project. \(error.localizedDescription)"
+        }
+    }
+
+    /// Another project takes the place of this one. Its own last comic comes
+    /// up — unless that's the comic already on screen, in which case the
+    /// pages stay exactly where they are and only the script changes. A
+    /// project with no comics yet takes the one that's open.
+    func switchTo(_ url: URL) {
+        if let project, project.url.standardizedFileURL == url.standardizedFileURL {
+            showsProjects = false
+            return
+        }
+        do {
+            let next = try Project.open(url)
+            closeProject()
+            adopt(next, registeringCurrentComic: next.manifest.comics.isEmpty)
+            library.noteOpened(url)
+            NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            showsProjects = false
+            if let lastID = next.manifest.lastComicID, let ref = next.manifest.comic(id: lastID),
+               let comicURL = next.locate(ref), comicURL != source {
+                open(comicURL)
+            }
+        } catch {
+            errorMessage = "Couldn’t open the project. \(error.localizedDescription)"
+        }
+    }
+
+    func renameProject(_ url: URL, to name: String) {
+        let wasOpen = project?.url.standardizedFileURL == url.standardizedFileURL
+        if wasOpen { project?.saveNow() }
+        do {
+            let moved = try library.rename(url, to: name)
+            if wasOpen {
+                project = nil
+                adopt(try Project.open(moved), registeringCurrentComic: false)
+            }
+        } catch {
+            errorMessage = "Couldn’t rename the project. \(error.localizedDescription)"
+        }
+    }
+
+    func duplicateProject(_ url: URL) {
+        if project?.url.standardizedFileURL == url.standardizedFileURL { project?.saveNow() }
+        do { _ = try library.duplicate(url) } catch {
+            errorMessage = "Couldn’t duplicate the project. \(error.localizedDescription)"
+        }
+    }
+
+    func trashProject(_ url: URL) {
+        if project?.url.standardizedFileURL == url.standardizedFileURL { closeProject() }
+        do { try library.trash(url) } catch {
+            errorMessage = "Couldn’t move the project to the Trash. \(error.localizedDescription)"
         }
     }
 
@@ -443,25 +503,14 @@ final class ReaderModel {
         openProject(at: url)
     }
 
+    /// A project from anywhere — Finder, Open Project…. Same as switching.
     func openProject(at url: URL) {
-        do {
-            closeProject()
-            let opened = try Project.open(url)
-            adopt(opened)
-            NSDocumentController.shared.noteNewRecentDocumentURL(url)
-            // Pick up where the script left off.
-            if !hasComic, let lastID = opened.manifest.lastComicID,
-               let ref = opened.manifest.comic(id: lastID), let comicURL = opened.locate(ref) {
-                open(comicURL)
-            }
-        } catch {
-            errorMessage = "Couldn’t open the project. \(error.localizedDescription)"
-        }
+        switchTo(url)
     }
 
-    private func adopt(_ project: Project) {
+    private func adopt(_ project: Project, registeringCurrentComic: Bool) {
         self.project = project
-        if let source, let title {
+        if registeringCurrentComic, let source, let title {
             let ref = project.comicRef(for: source, title: title)
             project.manifest.lastComicID = ref.id
         }

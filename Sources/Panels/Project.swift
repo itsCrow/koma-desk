@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import PanelsProject
+import ComicArchive
 import PageCapture
 
 /// The open project: the script, its citations, and where they point. Saves
@@ -69,15 +70,18 @@ final class Project {
     @discardableResult
     func comicRef(for fileURL: URL, title: String) -> ComicRef {
         let path = fileURL.standardizedFileURL.path
+        let series = ComicIdentity(fileURL: fileURL).series
         if var known = manifest.comic(for: fileURL) {
-            if known.path != path, let index = manifest.comics.firstIndex(where: { $0.id == known.id }) {
-                known.path = path
+            var changed = false
+            if known.path != path { known.path = path; changed = true }
+            if known.series == nil { known.series = series; changed = true }
+            if changed, let index = manifest.comics.firstIndex(where: { $0.id == known.id }) {
                 manifest.comics[index] = known
             }
             return known
         }
         let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        let ref = ComicRef(title: title, path: path, filename: fileURL.lastPathComponent, fileSize: size)
+        let ref = ComicRef(title: title, path: path, filename: fileURL.lastPathComponent, fileSize: size, series: series)
         manifest.comics.append(ref)
         return ref
     }

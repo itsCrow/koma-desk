@@ -145,6 +145,56 @@ struct ProjectStoreTests {
         #expect(manifest.comic(for: other) == nil)
     }
 
+    @Test("Listing a folder finds its projects and nothing else")
+    func listing() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-root-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        _ = try ProjectStore.create(at: root.appendingPathComponent("A.panelsproject"), name: "A")
+        _ = try ProjectStore.create(at: root.appendingPathComponent("B.panelsproject"), name: "B")
+        // Things that look like projects but aren't.
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Empty.panelsproject"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Folder"), withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent("file.panelsproject"))
+        try Data().write(to: root.appendingPathComponent("notes.txt"))
+
+        let found = Set(ProjectStore.list(in: root).map(\.lastPathComponent))
+        #expect(found == ["A.panelsproject", "B.panelsproject"])
+        #expect(ProjectStore.list(in: root.appendingPathComponent("missing")).isEmpty)
+        #expect(try ProjectStore.loadManifest(root.appendingPathComponent("A.panelsproject")).name == "A")
+    }
+
+    @Test("New projects get names that aren't taken, and folder-safe ones")
+    func uniqueNames() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-names-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let first = ProjectStore.uniqueURL(named: "Eclipse", in: root)
+        #expect(first.lastPathComponent == "Eclipse.panelsproject")
+        _ = try ProjectStore.create(at: first, name: "Eclipse")
+        #expect(ProjectStore.uniqueURL(named: "Eclipse", in: root).lastPathComponent == "Eclipse 2.panelsproject")
+        #expect(ProjectStore.uniqueURL(named: "Ch: 1/2", in: root).lastPathComponent == "Ch 12.panelsproject")
+        #expect(ProjectStore.uniqueURL(named: "   ", in: root).lastPathComponent == "Untitled.panelsproject")
+    }
+
+    @Test("A manifest without a series still decodes; one with it keeps it")
+    func seriesOptional() throws {
+        let legacy = """
+        {"version":1,"name":"Old","comics":[{"id":"abc123","title":"Berserk v01","path":"/x/b.cbz","filename":"b.cbz","fileSize":5}],"citations":[],"positions":{}}
+        """
+        let decoder = JSONDecoder()
+        let old = try decoder.decode(ProjectManifest.self, from: Data(legacy.utf8))
+        #expect(old.comics[0].series == nil)
+
+        let ref = ComicRef(title: "Berserk v01", path: "/x/b.cbz", filename: "b.cbz", fileSize: 5, series: "Berserk")
+        let data = try JSONEncoder().encode(ProjectManifest(name: "New", comics: [ref]))
+        #expect(try decoder.decode(ProjectManifest.self, from: data).comics[0].series == "Berserk")
+    }
+
     @Test("IDs are short, URL-safe and distinct")
     func ids() {
         let ids = (0..<200).map { _ in ProjectManifest.makeID() }
