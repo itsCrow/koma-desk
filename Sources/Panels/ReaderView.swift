@@ -218,19 +218,6 @@ struct ReaderView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .overlay(alignment: .topLeading) {
-            if showsControls, let title = model.title {
-                Text(title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .glassPanel(cornerRadius: 12)
-                    .padding(16)
-                    .transition(.opacity)
-            }
-        }
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
                 if let warning = model.warning {
