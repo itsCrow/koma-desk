@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import CoreGraphics
+import AppKit
 @testable import Panels
 import ComicArchive
 import ComicLibrary
@@ -380,6 +381,164 @@ struct ReaderProjectTests {
         _ = model.copyCitation()
         #expect(project.manifest.citations.first?.itemID == good.id)
         #expect(project.manifest.items.map(\.itemID) == [good.id])
+    }
+
+    @Test("A page range records the pages on screen, stretches, and reaches the writing")
+    func pageRanges() async throws {
+        guard let path = Self.comicPath else {
+            withKnownIssue("Set PANELS_TEST_CBR to run.") { Issue.record("skipped") }
+            return
+        }
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+
+        model.addToLibrary(URL(fileURLWithPath: path))
+        #expect(await Self.wait { model.hasComic })
+        model.newProject(named: "Ranges")
+        let project = try #require(model.project)
+        let item = try #require(model.item)
+
+        model.goTo(spread: 6)
+        let opened = model.visiblePages.map(\.number).sorted()
+        model.startPageRange()
+
+        let span = try #require(project.manifest.spans.first)
+        #expect(span.itemID == item.id)
+        #expect(span.firstPage == opened.first)
+        #expect(span.lastPage == opened.last)
+        #expect(span.text.hasPrefix(item.series))
+        // The editor is told to put it on the writing and keep it going.
+        #expect(project.pendingSpanCommand == .start(span))
+        project.pendingSpanCommand = nil
+
+        // Read on, still writing about the same beat.
+        model.goTo(spread: 12)
+        let reached = try #require(model.visiblePages.map(\.number).max())
+        model.extendPageRange()
+        let stretched = try #require(project.manifest.span(id: span.id))
+        #expect(stretched.firstPage == span.firstPage)
+        #expect(stretched.lastPage == reached)
+        // Still one range, not two.
+        #expect(project.manifest.spans.count == 1)
+
+        // Ending and removing are the editor's to carry out.
+        model.endPageRange()
+        #expect(project.pendingSpanCommand == .end)
+        model.removePageRange()
+        #expect(project.pendingSpanCommand == .remove)
+    }
+
+    @Test("A range reaches the script, the shot list and a paste")
+    func rangesInTheScript() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let project = try scratch.project(named: "Ranges", series: "Berserk")
+
+        let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|1", firstPageIndex: 11,
+                            pageNumbers: [12, 17], text: "Berserk, Vol. 1, pp. 12–17")
+        project.manifest.store(span)
+        let cited = Citation(itemID: "b.cbz|1", pageIndex: 13, pageNumbers: [14], text: "Berserk, Vol. 1, p. 14")
+        project.manifest.citations = [cited]
+        project.script = """
+        <span:k7m2pq> The eclipse begins.
+        <span:k7m2pq> It keeps going [Berserk, Vol. 1, p. 14](panels://cite/\(cited.id)) here.
+        Then something else entirely.
+        """
+
+        #expect(project.spansInScriptOrder.map(\.id) == ["k7m2pq"])
+        #expect(project.unusedSpans.isEmpty)
+        // A shot knows which block of writing it sits in.
+        #expect(project.span(containing: cited.id)?.id == "k7m2pq")
+        #expect(project.opening(of: "k7m2pq") == "The eclipse begins.")
+        // Pasting elsewhere carries the range, once, at the end of the block.
+        #expect(project.plainTextScript == """
+        The eclipse begins.
+        It keeps going Berserk, Vol. 1, p. 14 here. (Berserk, Vol. 1, pp. 12–17)
+        Then something else entirely.
+        """)
+
+        // A range the writing no longer points at is dropped on a tidy-up.
+        project.script = "Nothing points at it now."
+        #expect(project.unusedSpans.map(\.id) == ["k7m2pq"])
+        project.cleanUpUnusedCaptures()
+        #expect(project.manifest.spans.isEmpty)
+    }
+
+    /// Drives the real editor: an NSTextView, the real coordinator, the real
+    /// render/serialise round trip. This is where page ranges can be silently
+    /// destroyed, so it is tested here rather than only through the model.
+    @MainActor
+    private func editor(script: String, in scratch: Scratch) throws -> (ScriptEditorView.Coordinator, ScriptTextView, Project) {
+        let project = try scratch.project(named: "Editing", series: "Berserk")
+        project.script = script
+        let coordinator = ScriptEditorView.Coordinator(project: project, model: scratch.model)
+        let textView = ScriptTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))
+        coordinator.textView = textView
+        textView.delegate = coordinator
+        coordinator.load()
+        return (coordinator, textView, project)
+    }
+
+    @Test("Formatting a paragraph inside a block does not knock it out of the block")
+    func headingKeepsTheBlock() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: """
+        <span:k7m2pq> The eclipse begins.
+        <span:k7m2pq> It keeps going.
+        <span:k7m2pq> And then it stops.
+        """, in: scratch)
+
+        // Put the cursor in the middle paragraph and make it a heading.
+        let middle = (textView.string as NSString).range(of: "It keeps going.")
+        textView.setSelectedRange(NSRange(location: middle.location, length: 0))
+        coordinator.apply(.heading(2))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+
+        // All three lines still belong to the block, and the middle one is now
+        // a heading. Without carrying the span across setAttributes, the block
+        // would have been cut in three.
+        let blocks = ScriptMarkdown.parse(project.script)
+        #expect(blocks.map(\.spanID) == ["k7m2pq", "k7m2pq", "k7m2pq"])
+        #expect(blocks[1].headingLevel == 2)
+        #expect(textView.spanRuns().count == 1)
+    }
+
+    @Test("A block keeps growing as the writing continues, until it's ended")
+    func blockKeepsGrowing() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "Nothing yet.", in: scratch)
+
+        let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|1", firstPageIndex: 11,
+                            pageNumbers: [12, 17], text: "Berserk, Vol. 1, pp. 12–17")
+        project.manifest.store(span)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        coordinator.applySpan(.start(span))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).map(\.spanID) == ["k7m2pq"])
+
+        // Carry on writing: the new paragraphs join the block by themselves.
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        textView.insertText("\nStill the same beat.", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).map(\.spanID) == ["k7m2pq", "k7m2pq"])
+
+        // End it, and what follows belongs to no block.
+        coordinator.applySpan(.end)
+        textView.insertText("\nA different subject.", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        let after = ScriptMarkdown.parse(project.script)
+        #expect(after.map(\.spanID) == ["k7m2pq", "k7m2pq", nil])
+        #expect(textView.spanRuns().count == 1)
+
+        // Removing takes the whole run off at once.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        coordinator.applySpan(.remove)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).allSatisfy { $0.spanID == nil })
+        #expect(textView.spanRuns().isEmpty)
     }
 
     @Test("Shots come back in script order, and a deleted chip leaves an unused citation")

@@ -9,14 +9,36 @@ public enum ScriptInline: Equatable, Sendable {
 
 /// One line of script. A line is a block — the editor's paragraph — so the
 /// file and the text view agree on where everything is.
-public enum ScriptBlock: Equatable, Sendable {
-    case heading(level: Int, [ScriptInline])
-    case paragraph([ScriptInline])
+public struct ScriptBlock: Equatable, Sendable {
+    public enum Kind: Equatable, Sendable {
+        case paragraph
+        case heading(level: Int)
+    }
 
-    public var inlines: [ScriptInline] {
-        switch self {
-        case .heading(_, let runs), .paragraph(let runs): return runs
-        }
+    public var kind: Kind
+    /// The page range this line is about, if it belongs to one. Consecutive
+    /// lines sharing an id read as one block of writing; the id names the
+    /// range, and the range itself lives in the project's manifest.
+    public var spanID: String?
+    public var inlines: [ScriptInline]
+
+    public init(kind: Kind, span: String? = nil, inlines: [ScriptInline]) {
+        self.kind = kind
+        self.spanID = span
+        self.inlines = inlines
+    }
+
+    public static func paragraph(_ inlines: [ScriptInline], span: String? = nil) -> ScriptBlock {
+        ScriptBlock(kind: .paragraph, span: span, inlines: inlines)
+    }
+
+    public static func heading(level: Int, _ inlines: [ScriptInline], span: String? = nil) -> ScriptBlock {
+        ScriptBlock(kind: .heading(level: level), span: span, inlines: inlines)
+    }
+
+    public var headingLevel: Int? {
+        if case .heading(let level) = kind { return level }
+        return nil
     }
 }
 
@@ -44,14 +66,41 @@ public enum ScriptMarkdown {
     }
 
     private static func parseLine(_ line: String) -> ScriptBlock {
+        // The span marker sits before everything else, so the rest of the line
+        // parses exactly as it would without one.
+        var span: String?
+        var body = line
+        if let marker = parseSpanMarker(line) {
+            span = marker.id
+            body = String(marker.rest)
+        }
         var level = 0
-        var rest = Substring(line)
+        var rest = Substring(body)
         while rest.first == "#", level < 2 { level += 1; rest = rest.dropFirst() }
         if level > 0, rest.first == " " {
-            return .heading(level: level, parseInlines(String(rest.dropFirst())))
+            return .heading(level: level, parseInlines(String(rest.dropFirst())), span: span)
         }
-        return .paragraph(parseInlines(line))
+        return .paragraph(parseInlines(body), span: span)
     }
+
+    static let spanOpening = "<span:"
+
+    /// `<span:k7m2pq> ` at the very start of a line, and what follows it.
+    /// Anything that isn't exactly this shape is ordinary prose.
+    static func parseSpanMarker(_ line: String) -> (id: String, rest: Substring)? {
+        guard line.hasPrefix(spanOpening) else { return nil }
+        let afterOpening = line.index(line.startIndex, offsetBy: spanOpening.count)
+        guard let close = line[afterOpening...].firstIndex(of: ">") else { return nil }
+        let id = String(line[afterOpening..<close])
+        guard !id.isEmpty, id.count <= 16,
+              id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
+        else { return nil }
+        let afterClose = line.index(after: close)
+        guard afterClose < line.endIndex, line[afterClose] == " " else { return nil }
+        return (id, line[line.index(after: afterClose)...])
+    }
+
+    static func spanMarker(id: String) -> String { spanOpening + id + "> " }
 
     /// Text with `\` escapes, and `[text](panels://cite/id)` links.
     static func parseInlines(_ s: String) -> [ScriptInline] {
@@ -115,14 +164,16 @@ public enum ScriptMarkdown {
     }
 
     private static func serializeBlock(_ block: ScriptBlock) -> String {
-        switch block {
-        case .heading(let level, let runs):
-            return String(repeating: "#", count: max(1, min(level, 2))) + " " + serializeInlines(runs)
-        case .paragraph(let runs):
-            let body = serializeInlines(runs)
-            // A paragraph that happens to start like a heading is escaped so
-            // it comes back as a paragraph.
-            return body.hasPrefix("#") ? "\\" + body : body
+        let prefix = block.spanID.map(spanMarker(id:)) ?? ""
+        switch block.kind {
+        case .heading(let level):
+            return prefix + String(repeating: "#", count: max(1, min(level, 2))) + " " + serializeInlines(block.inlines)
+        case .paragraph:
+            var body = serializeInlines(block.inlines)
+            // A paragraph that happens to start like a heading, or like a span
+            // marker, is escaped so it comes back as the paragraph it is.
+            if body.hasPrefix("#") || parseSpanMarker(body) != nil { body = "\\" + body }
+            return prefix + body
         }
     }
 
@@ -161,6 +212,29 @@ public enum ScriptMarkdown {
         return order
     }
 
+    /// The page ranges in the order they first appear, each once.
+    public static func spanIDs(in markdown: String) -> [String] {
+        var seen = Set<String>()
+        var order: [String] = []
+        for block in parse(markdown) {
+            if let id = block.spanID, seen.insert(id).inserted { order.append(id) }
+        }
+        return order
+    }
+
+    /// The page range the line holding a citation belongs to — which pages a
+    /// shot sits among, for the editor.
+    public static func spanID(containing citationID: String, in markdown: String) -> String? {
+        for block in parse(markdown) {
+            let holdsIt = block.inlines.contains {
+                if case .citation(let found, _) = $0 { return found == citationID }
+                return false
+            }
+            if holdsIt { return block.spanID }
+        }
+        return nil
+    }
+
     /// The text of the line a citation sits in, without its chips — the
     /// sentence around a shot, for a shot list.
     public static func context(of id: String, in markdown: String) -> String? {
@@ -182,14 +256,25 @@ public enum ScriptMarkdown {
     // MARK: - Plain text
 
     /// For pasting somewhere that isn't the app: chips become their text.
-    public static func plainText(_ blocks: [ScriptBlock]) -> String {
-        blocks.map { block in
-            block.inlines.map { run -> String in
+    ///
+    /// With `spanLabels`, each block of writing carries its page range on its
+    /// last line — "… (pp. 12–17)". Without them the ranges are dropped, which
+    /// is what a caller wants when the reader already knows.
+    public static func plainText(_ blocks: [ScriptBlock], spanLabels: [String: String] = [:]) -> String {
+        blocks.enumerated().map { index, block in
+            var line = block.inlines.map { run -> String in
                 switch run {
                 case .text(let s): return s
                 case .citation(_, let text): return text
                 }
             }.joined()
+            if let id = block.spanID, let label = spanLabels[id], !label.isEmpty {
+                let endsTheRun = index == blocks.count - 1 || blocks[index + 1].spanID != id
+                if endsTheRun {
+                    line += line.isEmpty ? "(\(label))" : " (\(label))"
+                }
+            }
+            return line
         }.joined(separator: "\n")
     }
 }

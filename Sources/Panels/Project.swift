@@ -25,6 +25,8 @@ final class Project {
     var pendingCommand: ScriptCommand?
     /// A citation the editor should scroll to and select.
     var pendingReveal: String?
+    /// A page-range change for the editor to apply to the writing.
+    var pendingSpanCommand: SpanCommand?
 
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
@@ -85,6 +87,23 @@ final class Project {
         return ScriptMarkdown.citationIDs(in: script).compactMap { byID[$0] }
     }
 
+    /// The page ranges in the order their blocks appear in the script.
+    var spansInScriptOrder: [PageSpan] {
+        let byID = Dictionary(manifest.spans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ScriptMarkdown.spanIDs(in: script).compactMap { byID[$0] }
+    }
+
+    /// The range a shot sits among, if its line belongs to a block.
+    func span(containing citationID: String) -> PageSpan? {
+        ScriptMarkdown.spanID(containing: citationID, in: script).flatMap { manifest.span(id: $0) }
+    }
+
+    /// Page ranges nothing in the script points at any more.
+    var unusedSpans: [PageSpan] {
+        let used = Set(ScriptMarkdown.spanIDs(in: script))
+        return manifest.spans.filter { !used.contains($0.id) }
+    }
+
     /// Citations no longer anywhere in the script. Deleting a chip leaves the
     /// citation behind, so without this they pile up unseen.
     var unusedCitations: [Citation] {
@@ -137,10 +156,31 @@ final class Project {
         }
         let used = Set(ScriptMarkdown.citationIDs(in: script))
         manifest.citations.removeAll { !used.contains($0.id) }
+        // Ranges own no files, so they cost nothing to keep — but a range the
+        // writing no longer points at is just as dead as an unused citation,
+        // and this is the one moment the writer has asked for a tidy-up.
+        let usedSpans = Set(ScriptMarkdown.spanIDs(in: script))
+        manifest.spans.removeAll { !usedSpans.contains($0.id) }
         // The writer keeps its own manifest of everything it ever wrote; it
         // should describe what the folder now holds.
         CaptureWriter(folder: capturesFolder).pruneMissingRecords()
         return (trashed, bytes)
+    }
+
+    /// How a block of writing starts — enough to recognise which passage a
+    /// range belongs to in an export.
+    func opening(of spanID: String, limit: Int = 90) -> String? {
+        for block in ScriptMarkdown.parse(script) where block.spanID == spanID {
+            let text = block.inlines.map { run -> String in
+                if case .text(let s) = run { return s }
+                return " "
+            }.joined()
+                .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty else { continue }
+            return text.count <= limit ? text : String(text.prefix(limit)) + "…"
+        }
+        return nil
     }
 
     /// The sentence a citation sits in.
@@ -152,9 +192,12 @@ final class Project {
         citation.captureFile.map { capturesFolder.appendingPathComponent($0) }
     }
 
-    /// The script with chips as plain text, for pasting somewhere else.
+    /// The script with chips as plain text, for pasting somewhere else. Each
+    /// block of writing keeps its page range, so the ranges survive the trip
+    /// into Google Docs.
     var plainTextScript: String {
-        ScriptMarkdown.plainText(ScriptMarkdown.parse(script))
+        let labels = Dictionary(manifest.spans.map { ($0.id, $0.text) }, uniquingKeysWith: { first, _ in first })
+        return ScriptMarkdown.plainText(ScriptMarkdown.parse(script), spanLabels: labels)
     }
 }
 
@@ -162,6 +205,16 @@ final class Project {
 enum ScriptCommand: Equatable {
     case heading(Int)
     case body
+}
+
+/// What to do to the page range around the writing at the cursor.
+enum SpanCommand: Equatable {
+    /// Put this range on the selection, and on whatever is typed next.
+    case start(PageSpan)
+    /// Stop the range here: what's typed next belongs to no block.
+    case end
+    /// Take the range off the block at the cursor entirely.
+    case remove
 }
 
 import UniformTypeIdentifiers

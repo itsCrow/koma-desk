@@ -168,6 +168,8 @@ final class ReaderModel {
     /// Where to land in the item being opened: its start when reading
     /// forward into it, its end when reading back into it.
     @ObservationIgnored private var pendingStart: ItemStart?
+    /// A page to land on once the comic a range points at has opened.
+    @ObservationIgnored private var pendingSpanLanding: Int?
     @ObservationIgnored private var focusTask: Task<Void, Never>?
 
     private static let directionKey = "PanelsReadingDirection"
@@ -317,6 +319,10 @@ final class ReaderModel {
         if let jump = pendingJump, jump.itemID == item?.id {
             pendingJump = nil
             land(on: jump)
+        }
+        if let page = pendingSpanLanding {
+            pendingSpanLanding = nil
+            goToPage(page)
         }
     }
 
@@ -728,8 +734,25 @@ final class ReaderModel {
                 }
                 lines.append("\(number). \(citation.text)")
                 lines.append("    \(filename)")
+                if let span = project.span(containing: citation.id) {
+                    lines.append("    in \(span.text)")
+                }
                 if let context = project.context(of: citation.id), !context.isEmpty {
                     lines.append("    \(context)")
+                }
+                lines.append("")
+            }
+            // The ranges the script covers, whether or not a panel was ever
+            // captured from them — what to put on screen between the shots.
+            let ranges = project.spansInScriptOrder
+            if !ranges.isEmpty {
+                lines.append("PAGE RANGES — \(ranges.count)")
+                lines.append("")
+                for span in ranges {
+                    lines.append("· \(span.text)")
+                    if let opening = project.opening(of: span.id), !opening.isEmpty {
+                        lines.append("    \(opening)")
+                    }
                 }
                 lines.append("")
             }
@@ -792,6 +815,70 @@ final class ReaderModel {
         }
         pendingJump = citation
         open(item: target)
+    }
+
+    // MARK: - Page ranges
+
+    /// Starts a block of writing about the pages on screen. What's selected in
+    /// the script takes the range now, and whatever is written next joins it,
+    /// until the writer ends it.
+    func startPageRange() {
+        guard let project, let item, let source, hasComic else { return }
+        let pages = visiblePages.map(\.number).sorted()
+        guard let first = pages.first, let pageIndex = visiblePages.map({ pageIndexByURL[$0.url] ?? 0 }).min()
+        else { return }
+        let span = PageSpan(itemID: item.id, firstPageIndex: pageIndex, pageNumbers: [first, pages.last ?? first],
+                            text: ComicIdentity(fileURL: source).citation(pages: pages))
+        project.manifest.store(span)
+        project.pendingSpanCommand = .start(span)
+        lastCaptureMessage = "Writing about \(span.text)"
+    }
+
+    /// Stops the block here: what's written next belongs to no range.
+    func endPageRange() {
+        project?.pendingSpanCommand = .end
+    }
+
+    /// Takes the range off the block of writing at the cursor.
+    func removePageRange() {
+        project?.pendingSpanCommand = .remove
+    }
+
+    /// Stretches the block being written to the page now on screen — you read
+    /// on while writing about the same beat.
+    func extendPageRange() {
+        guard let project, let source, hasComic else { return }
+        // The range still being written is the one most recently started.
+        guard var span = project.spansInScriptOrder.last ?? project.manifest.spans.last else { return }
+        let pages = visiblePages.map(\.number).sorted()
+        guard let reached = pages.last else { return }
+        let first = min(span.firstPage, pages.first ?? reached)
+        let last = max(span.lastPage, reached)
+        guard first != span.firstPage || last != span.lastPage else { return }
+        span.pageNumbers = [first, last]
+        span.text = ComicIdentity(fileURL: source).citation(pages: [first, last])
+        project.manifest.store(span)
+        lastCaptureMessage = "Now \(span.text)"
+    }
+
+    var canExtendPageRange: Bool {
+        guard let project, hasComic else { return false }
+        return !project.manifest.spans.isEmpty
+    }
+
+    /// Brings the pages a block of writing is about back on screen.
+    func jump(toSpan id: String) {
+        guard let project, let span = project.manifest.span(id: id) else { return }
+        guard let target = library.item(id: span.itemID) else {
+            errorMessage = "The comic this range points at isn’t in your library. Add the folder it’s in and it will open."
+            return
+        }
+        if target.id == item?.id {
+            goToPage(span.firstPageIndex)
+        } else {
+            pendingSpanLanding = span.firstPageIndex
+            open(item: target)
+        }
     }
 
     private func land(on citation: Citation) {

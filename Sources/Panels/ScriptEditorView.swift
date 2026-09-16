@@ -28,6 +28,8 @@ struct ScriptEditorView: NSViewRepresentable {
         textView.onFocusChange = { editing in model.isScriptEditing = editing }
         let coordinator = context.coordinator
         textView.onHoverChip = { [weak coordinator] chip, rect in coordinator?.hover(chip, at: rect) }
+        textView.onHoverSpan = { [weak coordinator] id, rect in coordinator?.hoverSpan(id, at: rect) }
+        textView.onClickSpan = { [weak coordinator] id in coordinator?.goToSpan(id) }
         textView.markdown = { [weak coordinator] range in coordinator?.markdown(of: range) ?? "" }
         textView.attributedString = { [weak coordinator] markdown in coordinator?.render(markdown) ?? NSAttributedString() }
         textView.delegate = context.coordinator
@@ -70,6 +72,10 @@ struct ScriptEditorView: NSViewRepresentable {
             coordinator.apply(command)
             project.pendingCommand = nil
         }
+        if let command = project.pendingSpanCommand {
+            coordinator.applySpan(command)
+            project.pendingSpanCommand = nil
+        }
         if let id = project.pendingReveal {
             coordinator.reveal(id)
             project.pendingReveal = nil
@@ -110,10 +116,11 @@ struct ScriptEditorView: NSViewRepresentable {
             let blocks = ScriptMarkdown.parse(markdown)
             for (index, block) in blocks.enumerated() {
                 let style: ScriptStyle.Paragraph
-                switch block {
-                case .heading(let level, _): style = level == 1 ? .heading1 : .heading2
+                switch block.kind {
+                case .heading(let level): style = level == 1 ? .heading1 : .heading2
                 case .paragraph: style = .body
                 }
+                let start = result.length
                 for run in block.inlines {
                     switch run {
                     case .text(let s):
@@ -124,6 +131,12 @@ struct ScriptEditorView: NSViewRepresentable {
                 }
                 if index < blocks.count - 1 {
                     result.append(NSAttributedString(string: "\n", attributes: ScriptStyle.attributes(for: style)))
+                }
+                // The newline carries the span too, so typing at the end of a
+                // block continues it rather than falling out of it.
+                if let span = block.spanID, result.length > start {
+                    result.addAttribute(ScriptStyle.spanKey, value: span,
+                                        range: NSRange(location: start, length: result.length - start))
                 }
             }
             return result
@@ -173,6 +186,15 @@ struct ScriptEditorView: NSViewRepresentable {
                 }
                 var runs: [ScriptInline] = []
                 var level = 0
+                // Deliberately the first character, not "the first one found":
+                // a fragment pasted into the middle of a paragraph must not
+                // pull the whole paragraph into its block.
+                var span: String?
+                if content.length > 0 {
+                    span = storage.attribute(ScriptStyle.spanKey, at: content.location, effectiveRange: nil) as? String
+                } else if lineRange.length > 0 {
+                    span = storage.attribute(ScriptStyle.spanKey, at: lineRange.location, effectiveRange: nil) as? String
+                }
                 storage.enumerateAttributes(in: content, options: []) { attributes, range, _ in
                     if let attachment = attributes[.attachment] as? CitationAttachment, let id = attachment.citationID {
                         runs.append(.citation(id: id, text: attachment.citationText))
@@ -191,7 +213,7 @@ struct ScriptEditorView: NSViewRepresentable {
                               : style == ScriptStyle.Paragraph.heading2.rawValue ? 2 : 0
                     }
                 }
-                blocks.append(level > 0 ? .heading(level: level, runs) : .paragraph(runs))
+                blocks.append(level > 0 ? .heading(level: level, runs, span: span) : .paragraph(runs, span: span))
                 if lineRange.length == 0 || content.length == lineRange.length { break }
                 location = lineRange.location + lineRange.length
                 if location == string.length {
@@ -207,7 +229,47 @@ struct ScriptEditorView: NSViewRepresentable {
             guard !isLoading else { return }
             rebuildPastedChips()
             restyleForeignText()
+            normalizeSpans()
             project.script = serialise()
+        }
+
+        /// Makes every character of a paragraph agree about which block of
+        /// writing it belongs to, taking the answer from the paragraph's first
+        /// character. Editing can leave a paragraph half in and half out — a
+        /// paste drops the attribute, an inserted chip arrives without it — and
+        /// the file format has no way to say that. Runs before every save, so a
+        /// hole is repaired within one keystroke instead of being written out.
+        private func normalizeSpans() {
+            guard let textView, let storage = textView.textStorage, storage.length > 0 else { return }
+            let string = storage.string as NSString
+            var fixes: [(NSRange, String?)] = []
+            var location = 0
+            while location < string.length {
+                let paragraph = string.paragraphRange(for: NSRange(location: location, length: 0))
+                let wanted = storage.attribute(ScriptStyle.spanKey, at: paragraph.location, effectiveRange: nil) as? String
+                var uniform = true
+                storage.enumerateAttribute(ScriptStyle.spanKey, in: paragraph, options: []) { value, _, stop in
+                    if (value as? String) != wanted { uniform = false; stop.pointee = true }
+                }
+                if !uniform { fixes.append((paragraph, wanted)) }
+                location = paragraph.location + max(paragraph.length, 1)
+            }
+            guard !fixes.isEmpty else { return }
+            isLoading = true
+            storage.beginEditing()
+            for (range, wanted) in fixes {
+                storage.removeAttribute(ScriptStyle.spanKey, range: range)
+                if let wanted { storage.addAttribute(ScriptStyle.spanKey, value: wanted, range: range) }
+            }
+            storage.endEditing()
+            isLoading = false
+        }
+
+        /// The block of writing the character at `location` belongs to.
+        func spanID(at location: Int) -> String? {
+            guard let storage = textView?.textStorage, storage.length > 0 else { return nil }
+            let index = min(max(location, 0), storage.length - 1)
+            return storage.attribute(ScriptStyle.spanKey, at: index, effectiveRange: nil) as? String
         }
 
         /// Text that arrived with someone else's attributes — a paste that
@@ -229,6 +291,11 @@ struct ScriptEditorView: NSViewRepresentable {
                     if let raw = value as? String, let found = ScriptStyle.Paragraph(rawValue: raw) { style = found; stop.pointee = true }
                 }
                 var attributes = ScriptStyle.attributes(for: style)
+                // setAttributes replaces everything, so the block this
+                // paragraph belongs to has to be carried across by hand.
+                if let span = storage.attribute(ScriptStyle.spanKey, at: paragraph.location, effectiveRange: nil) as? String {
+                    attributes[ScriptStyle.spanKey] = span
+                }
                 storage.enumerateAttribute(.attachment, in: range, options: []) { value, sub, _ in
                     attributes[.attachment] = value
                     attributes[.link] = (value as? CitationAttachment)?.citationID.map { ScriptMarkdown.citationURL(id: $0) }
@@ -253,7 +320,13 @@ struct ScriptEditorView: NSViewRepresentable {
                 guard let url, let id = ScriptMarkdown.citationID(from: url) else { return }
                 let style = ScriptStyle.Paragraph(rawValue: storage.attribute(ScriptStyle.paragraphKey, at: range.location, effectiveRange: nil) as? String ?? "") ?? .body
                 let text = project.citation(id: id)?.text ?? "citation"
-                replacements.append((range, chip(id: id, text: text, style: style)))
+                let span = storage.attribute(ScriptStyle.spanKey, at: range.location, effectiveRange: nil) as? String
+                let rebuilt = NSMutableAttributedString(attributedString: chip(id: id, text: text, style: style))
+                if let span {
+                    rebuilt.addAttribute(ScriptStyle.spanKey, value: span,
+                                         range: NSRange(location: 0, length: rebuilt.length))
+                }
+                replacements.append((range, rebuilt))
             }
             guard !replacements.isEmpty else { return }
             let selection = textView.selectedRange()
@@ -281,6 +354,11 @@ struct ScriptEditorView: NSViewRepresentable {
             if next >= text.length || text.character(at: next) != 0x20 {
                 piece.append(NSAttributedString(string: " ", attributes: ScriptStyle.attributes(for: style)))
             }
+            // A chip dropped into a block of writing belongs to that block.
+            if let span = spanID(at: range.location) {
+                piece.addAttribute(ScriptStyle.spanKey, value: span,
+                                   range: NSRange(location: 0, length: piece.length))
+            }
             guard textView.shouldChangeText(in: range, replacementString: piece.string) else { return }
             textView.textStorage?.replaceCharacters(in: range, with: piece)
             textView.didChangeText()
@@ -299,7 +377,13 @@ struct ScriptEditorView: NSViewRepresentable {
             let string = storage.string as NSString
             let paragraph = string.paragraphRange(for: textView.selectedRange())
             guard textView.shouldChangeText(in: paragraph, replacementString: nil) else { return }
-            let attributes = ScriptStyle.attributes(for: style)
+            var attributes = ScriptStyle.attributes(for: style)
+            // Formatting a paragraph must not drop it out of its block, nor
+            // end a block that is still being written.
+            if paragraph.location < storage.length,
+               let span = storage.attribute(ScriptStyle.spanKey, at: paragraph.location, effectiveRange: nil) as? String {
+                attributes[ScriptStyle.spanKey] = span
+            }
             storage.enumerateAttribute(.attachment, in: paragraph, options: []) { value, range, _ in
                 var applied = attributes
                 if value != nil {
@@ -312,6 +396,63 @@ struct ScriptEditorView: NSViewRepresentable {
             }
             textView.didChangeText()
             textView.typingAttributes = attributes
+        }
+
+        /// Puts a page range on the writing, takes one off, or stops one here.
+        func applySpan(_ command: SpanCommand) {
+            guard let textView, let storage = textView.textStorage else { return }
+            switch command {
+            case .start(let span):
+                let range = (storage.string as NSString).paragraphRange(for: textView.selectedRange())
+                guard textView.shouldChangeText(in: range, replacementString: nil) else { return }
+                storage.addAttribute(ScriptStyle.spanKey, value: span.id, range: range)
+                textView.didChangeText()
+                // Carried by the typing attributes, so the block keeps growing
+                // as the writer keeps writing.
+                textView.typingAttributes[ScriptStyle.spanKey] = span.id
+                textView.window?.makeFirstResponder(textView)
+            case .end:
+                textView.typingAttributes.removeValue(forKey: ScriptStyle.spanKey)
+            case .remove:
+                let location = textView.selectedRange().location
+                let probe = min(location, max(storage.length - 1, 0))
+                guard let id = spanID(at: location),
+                      let run = (textView as? ScriptTextView)?.spanRuns().first(where: {
+                          $0.id == id && NSLocationInRange(probe, $0.range)
+                      })
+                else { return }
+                guard textView.shouldChangeText(in: run.range, replacementString: nil) else { return }
+                storage.removeAttribute(ScriptStyle.spanKey, range: run.range)
+                textView.didChangeText()
+                textView.typingAttributes.removeValue(forKey: ScriptStyle.spanKey)
+            }
+        }
+
+        func goToSpan(_ id: String) {
+            model.jump(toSpan: id)
+        }
+
+        /// The range a block is about, shown the way a chip's citation is.
+        func hoverSpan(_ id: String?, at rect: NSRect) {
+            previewTask?.cancel()
+            guard let id, let textView, let span = project.manifest.span(id: id) else {
+                preview?.close()
+                preview = nil
+                return
+            }
+            previewTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(220))
+                guard !Task.isCancelled, let self else { return }
+                self.preview?.close()
+                let popover = NSPopover()
+                popover.behavior = .applicationDefined
+                popover.animates = false
+                popover.appearance = NSAppearance(named: .darkAqua)
+                popover.contentViewController = NSHostingController(rootView: SpanPreview(text: span.text))
+                let anchor = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: 1)
+                popover.show(relativeTo: anchor, of: textView, preferredEdge: .minY)
+                self.preview = popover
+            }
         }
 
         private func currentStyle() -> ScriptStyle.Paragraph {
@@ -384,6 +525,24 @@ struct ScriptEditorView: NSViewRepresentable {
     }
 }
 
+/// What a block of writing is about, while the mouse is over it.
+private struct SpanPreview: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "book.pages")
+                .font(.system(size: 11, weight: .semibold))
+            Text(text)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+}
+
 // MARK: - Text view
 
 /// Says when it has the keyboard, so the reader's own keys — space to turn
@@ -399,9 +558,115 @@ final class ScriptTextView: NSTextView {
     var attributedString: ((String) -> NSAttributedString)?
     /// The chip under the mouse and where it is, or nil when there isn't one.
     var onHoverChip: ((CitationAttachment?, NSRect) -> Void)?
+    /// The block of writing under the mouse and where it is.
+    var onHoverSpan: ((String?, NSRect) -> Void)?
+    /// The writer clicked a block's margin rule: go to its first page.
+    var onClickSpan: ((String) -> Void)?
 
     private var hoverTracking: NSTrackingArea?
     private weak var hoveredChip: CitationAttachment?
+    private var hoveredSpan: String? {
+        didSet { if hoveredSpan != oldValue { needsDisplay = true } }
+    }
+
+    // MARK: Blocks of writing
+
+    /// Each maximal run of consecutive paragraphs sharing a page range. The
+    /// id names a range; a run of paragraphs is what's drawn as one block, so
+    /// a paragraph dragged out of the middle simply leaves two blocks.
+    func spanRuns() -> [(id: String, range: NSRange)] {
+        guard let storage = textStorage, storage.length > 0 else { return [] }
+        let string = storage.string as NSString
+        var runs: [(id: String, range: NSRange)] = []
+        var location = 0
+        while location < string.length {
+            let paragraph = string.paragraphRange(for: NSRange(location: location, length: 0))
+            if let id = storage.attribute(ScriptStyle.spanKey, at: paragraph.location, effectiveRange: nil) as? String {
+                if var last = runs.last, last.id == id,
+                   last.range.location + last.range.length == paragraph.location {
+                    last.range.length += paragraph.length
+                    runs[runs.count - 1] = last
+                } else {
+                    runs.append((id, paragraph))
+                }
+            }
+            location = paragraph.location + max(paragraph.length, 1)
+        }
+        return runs
+    }
+
+    /// The box to draw around a run, in view coordinates.
+    private func box(for range: NSRange) -> NSRect? {
+        guard let layoutManager, let textContainer else { return nil }
+        // A run ends with the newline that separates it from what follows;
+        // measuring that would add an empty line to the box.
+        var measured = range
+        let string = self.string as NSString
+        while measured.length > 0,
+              string.character(at: measured.location + measured.length - 1) == 0x0A {
+            measured.length -= 1
+        }
+        // Never ask about glyphs that haven't been laid out yet — this runs
+        // inside a draw pass.
+        let laid = layoutManager.characterRange(forGlyphRange: layoutManager.glyphRange(for: textContainer),
+                                                actualGlyphRange: nil)
+        measured = NSIntersectionRange(measured, laid)
+        guard measured.length > 0 else { return nil }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: measured, actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        // Full width, so it reads as a block rather than hugging the ragged
+        // right edge of the prose.
+        let padding = textContainer.lineFragmentPadding
+        rect.origin.x = padding
+        rect.size.width = max(textContainer.size.width - padding * 2, 0)
+        rect = rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        return rect.insetBy(dx: -5, dy: -3)
+    }
+
+    /// The margin rule for a block — the click target, kept off the text so
+    /// clicking the words still places the caret.
+    private func rule(beside box: NSRect) -> NSRect {
+        NSRect(x: 7, y: box.minY + 2, width: 3, height: max(box.height - 4, 0))
+    }
+
+    /// The whole left inset is the hit region; the rule is just what's drawn.
+    private func ruleHitBox(beside box: NSRect) -> NSRect {
+        NSRect(x: 0, y: box.minY, width: max(textContainerOrigin.x, 12), height: box.height)
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        for run in spanRuns() {
+            guard let box = box(for: run.range), box.intersects(rect) else { continue }
+            let hovered = run.id == hoveredSpan
+            let path = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+            ScriptStyle.spanFill(hovered: hovered).setFill()
+            path.fill()
+            ScriptStyle.spanStroke(hovered: hovered).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            let rule = NSBezierPath(roundedRect: rule(beside: box), xRadius: 1.5, yRadius: 1.5)
+            NSColor.systemOrange.withAlphaComponent(hovered ? 1 : 0.6).setFill()
+            rule.fill()
+        }
+    }
+
+    /// The block under a point, and the box it's drawn in.
+    func span(at point: NSPoint) -> (id: String, box: NSRect)? {
+        for run in spanRuns() {
+            guard let box = box(for: run.range) else { continue }
+            if box.contains(point) || ruleHitBox(beside: box).contains(point) { return (run.id, box) }
+        }
+        return nil
+    }
+
+    private func spanRule(at point: NSPoint) -> String? {
+        for run in spanRuns() {
+            guard let box = box(for: run.range) else { continue }
+            if ruleHitBox(beside: box).contains(point) { return run.id }
+        }
+        return nil
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -414,19 +679,32 @@ final class ScriptTextView: NSTextView {
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
         let point = convert(event.locationInWindow, from: nil)
+        // Chips sit inside blocks, so a chip under the mouse wins.
         if let (chip, rect) = chip(at: point) {
             if chip !== hoveredChip {
                 hoveredChip = chip
                 onHoverChip?(chip, rect)
             }
-        } else if hoveredChip != nil {
+            if hoveredSpan != nil { hoveredSpan = nil; onHoverSpan?(nil, .zero) }
+            return
+        }
+        if hoveredChip != nil {
             hoveredChip = nil
             onHoverChip?(nil, .zero)
+        }
+        let found = span(at: point)
+        if found?.id != hoveredSpan {
+            hoveredSpan = found?.id
+            onHoverSpan?(found?.id, found?.box ?? .zero)
         }
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        if hoveredSpan != nil {
+            hoveredSpan = nil
+            onHoverSpan?(nil, .zero)
+        }
         if hoveredChip != nil {
             hoveredChip = nil
             onHoverChip?(nil, .zero)
@@ -494,7 +772,26 @@ final class ScriptTextView: NSTextView {
         // A selection on a page keeps its own view first responder; let go
         // of it before this view asks for the keyboard.
         NotificationCenter.default.post(name: .panelsClearPageTextSelection, object: nil)
+        let point = convert(event.locationInWindow, from: nil)
+        // The margin rule goes to the pages. Clicking the words never does —
+        // that has to keep placing the caret.
+        if let id = spanRule(at: point) {
+            onClickSpan?(id)
+            return
+        }
+        if event.modifierFlags.contains(.command), let found = span(at: point) {
+            onClickSpan?(found.id)
+            return
+        }
         super.mouseDown(with: event)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        for run in spanRuns() {
+            guard let box = box(for: run.range) else { continue }
+            addCursorRect(ruleHitBox(beside: box), cursor: .pointingHand)
+        }
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -518,6 +815,18 @@ enum ScriptStyle {
     static var backgroundColor: Color { Color(nsColor: background) }
     static var headerBackground: Color { Color(nsColor: NSColor(calibratedWhite: 0.16, alpha: 1)) }
     static let paragraphKey = NSAttributedString.Key("panels.paragraph")
+    /// The page range a line belongs to. Carried on every character of the
+    /// line including its newline, so a block of writing survives editing.
+    static let spanKey = NSAttributedString.Key("panels.span")
+
+    /// Orange, so a block of writing about a range never reads as a citation
+    /// chip, which is the accent colour.
+    static func spanFill(hovered: Bool) -> NSColor {
+        NSColor.systemOrange.withAlphaComponent(hovered ? 0.20 : 0.10)
+    }
+    static func spanStroke(hovered: Bool) -> NSColor {
+        NSColor.systemOrange.withAlphaComponent(hovered ? 0.75 : 0.35)
+    }
 
     enum Paragraph: String {
         case body, heading1, heading2

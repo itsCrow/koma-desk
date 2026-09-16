@@ -59,6 +59,101 @@ struct ScriptMarkdownTests {
     }
 }
 
+@Suite("Page ranges in a script")
+struct ScriptSpanTests {
+    @Test("A block of writing carries its range on every line, and round-trips")
+    func markers() {
+        let text = """
+        <span:k7m2pq> The eclipse begins here.
+        <span:k7m2pq> ## Still the same block
+        <span:k7m2pq> And it keeps going.
+        Then something unrelated.
+        """
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks.map(\.spanID) == ["k7m2pq", "k7m2pq", "k7m2pq", nil])
+        // The marker sits before the heading hashes, so the heading still reads.
+        #expect(blocks[1].headingLevel == 2)
+        #expect(blocks[1].inlines == [.text("Still the same block")])
+        #expect(blocks[0].inlines == [.text("The eclipse begins here.")])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+    }
+
+    @Test("A citation inside a block keeps working, and knows which block it's in")
+    func citationInsideASpan() {
+        let text = "<span:k7m2pq> He raises it [Berserk, p. 117](panels://cite/abc123) and waits."
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks[0].spanID == "k7m2pq")
+        #expect(blocks[0].inlines == [
+            .text("He raises it "),
+            .citation(id: "abc123", text: "Berserk, p. 117"),
+            .text(" and waits."),
+        ])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+        #expect(ScriptMarkdown.spanID(containing: "abc123", in: text) == "k7m2pq")
+        #expect(ScriptMarkdown.spanID(containing: "nope12", in: text) == nil)
+        // A citation outside any block belongs to none.
+        let loose = "Just a [shot](panels://cite/xyz789) here."
+        #expect(ScriptMarkdown.spanID(containing: "xyz789", in: loose) == nil)
+    }
+
+    @Test("Prose that looks like a marker stays prose")
+    func markerEscapes() {
+        // Written by hand into the file, this is a real block marker...
+        #expect(ScriptMarkdown.parse("<span:abc123> hello")[0].spanID == "abc123")
+        // ...but the same text typed as prose has to survive a round trip.
+        let typed: [ScriptBlock] = [.paragraph([.text("<span:abc123> hello")])]
+        let serialized = ScriptMarkdown.serialize(typed)
+        #expect(serialized == "\\<span:abc123> hello")
+        #expect(ScriptMarkdown.parse(serialized) == typed)
+
+        // Near misses are never markers: no space, no closing bracket, bad id.
+        for line in ["<span:abc123>hello", "<span:abc123 hello", "<span:> hello",
+                     "<span:has a space> hi", "<spam:abc123> hello", "<span:abc123>"] {
+            #expect(ScriptMarkdown.parse(line)[0].spanID == nil, "\(line) should be prose")
+        }
+        // And an unrelated tag at the start of a line is left alone entirely.
+        #expect(ScriptMarkdown.serialize(ScriptMarkdown.parse("<b>bold</b>")) == "<b>bold</b>")
+    }
+
+    @Test("Ranges come back in the order they first appear, each once")
+    func order() {
+        let text = """
+        <span:aaa111> One.
+        <span:aaa111> Still one.
+        Unlinked.
+        <span:bbb222> Two.
+        <span:aaa111> One again, later.
+        """
+        #expect(ScriptMarkdown.spanIDs(in: text) == ["aaa111", "bbb222"])
+        #expect(ScriptMarkdown.spanIDs(in: "nothing here") == [])
+    }
+
+    @Test("Pasting elsewhere carries the ranges, or drops them")
+    func plainTextWithLabels() {
+        let blocks = ScriptMarkdown.parse("""
+        <span:k7m2pq> The eclipse begins.
+        <span:k7m2pq> And it keeps going.
+        Then something unrelated.
+        """)
+        let labels = ["k7m2pq": "pp. 12–17"]
+        // The range lands once, on the last line of the block.
+        #expect(ScriptMarkdown.plainText(blocks, spanLabels: labels) == """
+        The eclipse begins.
+        And it keeps going. (pp. 12–17)
+        Then something unrelated.
+        """)
+        // Without labels, nothing changes from before.
+        #expect(ScriptMarkdown.plainText(blocks) == """
+        The eclipse begins.
+        And it keeps going.
+        Then something unrelated.
+        """)
+        // A label with no matching range is simply not used.
+        #expect(ScriptMarkdown.plainText(blocks, spanLabels: ["other1": "pp. 1–2"])
+                == ScriptMarkdown.plainText(blocks))
+    }
+}
+
 @Suite("Citation order in a script")
 struct CitationOrderTests {
     @Test("Ids come back in the order they appear, not the order they were made")
@@ -131,6 +226,91 @@ struct ProjectStoreTests {
         #expect(back.script == loaded.script)
         #expect(back.manifest.citation(id: cite.id)?.panel == 3)
         #expect(back.manifest.item(id: item.itemID)?.volume == 1)
+    }
+
+    @Test("A version-3 project opens and comes forward, keeping everything it had")
+    func upgradesFromVersion3() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Old.panelsproject", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+
+        // Written by hand exactly as version 3 wrote it — no "spans" key at
+        // all. A round-trip of the current type could never catch this: the
+        // synthesized decoder throws keyNotFound rather than defaulting.
+        let v3 = """
+        {
+          "citations" : [
+            {
+              "captureFile" : "Dragon Ball + Super ch028 p14 panel5.png",
+              "date" : "2026-09-16T08:37:40Z",
+              "id" : "enzyk7",
+              "itemID" : "Chapter 028.cbr|15030490",
+              "pageIndex" : 13,
+              "pageNumbers" : [ 14 ],
+              "panel" : 5,
+              "region" : { "height" : 0.18, "width" : 0.88, "x" : 0.05, "y" : 0.4 },
+              "text" : "Dragon Ball + Super, Ch. 28, p. 14, panel 5"
+            }
+          ],
+          "items" : [
+            {
+              "chapter" : 28,
+              "fileSize" : 15030490,
+              "filename" : "Chapter 028.cbr",
+              "itemID" : "Chapter 028.cbr|15030490",
+              "series" : "Dragon Ball + Super",
+              "title" : "Ch. 28"
+            }
+          ],
+          "name" : "turtle school",
+          "series" : "Dragon Ball + Super",
+          "version" : 3
+        }
+        """
+        try Data(v3.utf8).write(to: ProjectStore.manifestURL(of: url))
+
+        let manifest = try ProjectStore.loadManifest(url)
+        #expect(manifest.version == ProjectManifest.currentVersion)
+        #expect(manifest.name == "turtle school")
+        #expect(manifest.series == "Dragon Ball + Super")
+        #expect(manifest.citations.count == 1)
+        #expect(manifest.citations[0].id == "enzyk7")
+        #expect(manifest.citations[0].panel == 5)
+        #expect(manifest.citations[0].region == PageRect(x: 0.05, y: 0.4, width: 0.88, height: 0.18))
+        #expect(manifest.items.map(\.itemID) == ["Chapter 028.cbr|15030490"])
+        // It simply has no ranges yet.
+        #expect(manifest.spans.isEmpty)
+    }
+
+    @Test("Page ranges round-trip, and replace rather than pile up")
+    func spansRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Spans.panelsproject", isDirectory: true)
+        var loaded = try ProjectStore.create(at: url, name: "Spans", series: "Berserk")
+
+        let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|5", firstPageIndex: 11,
+                            pageNumbers: [12, 17], text: "Berserk, Vol. 1, pp. 12–17",
+                            date: Date(timeIntervalSince1970: 0))
+        loaded.manifest.store(span)
+        #expect(loaded.manifest.spans.count == 1)
+        // Stretching the range keeps one record, not two.
+        var stretched = span
+        stretched.pageNumbers = [12, 20]
+        loaded.manifest.store(stretched)
+        #expect(loaded.manifest.spans.count == 1)
+        #expect(loaded.manifest.spans[0].lastPage == 20)
+        loaded.script = "<span:k7m2pq> The eclipse begins."
+        try ProjectStore.save(loaded, to: url)
+
+        let back = try ProjectStore.load(url)
+        #expect(back.manifest.spans == [stretched])
+        #expect(back.manifest.span(id: "k7m2pq")?.firstPage == 12)
+        #expect(back.manifest.span(id: "nope12") == nil)
+        #expect(ScriptMarkdown.spanIDs(in: back.script) == ["k7m2pq"])
     }
 
     @Test("A project from the earlier format is refused, not half-read")

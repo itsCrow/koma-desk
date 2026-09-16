@@ -9,6 +9,9 @@ public enum ProjectError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .unsupportedVersion(let version):
+            if version > ProjectManifest.currentVersion {
+                return "This project was made by a newer version of Panels (format \(version)) and can’t be opened."
+            }
             return "This project was made by an earlier version of Panels (format \(version)) and can’t be opened."
         }
     }
@@ -50,14 +53,19 @@ public enum ProjectStore {
         try decodeManifest(Data(contentsOf: manifestURL(of: url)))
     }
 
-    /// A manifest from an earlier format is refused outright rather than
-    /// half-read: its citations point at things by names this version
-    /// doesn't know.
+    /// Reads a manifest, upgrading a still-supported older format on the way
+    /// in. Anything older than that, or newer than this app understands, is
+    /// refused outright rather than half-read.
     static func decodeManifest(_ data: Data) throws -> ProjectManifest {
         struct Probe: Decodable { var version: Int }
         let version = (try? decoder.decode(Probe.self, from: data))?.version ?? 0
-        guard version == ProjectManifest.currentVersion else { throw ProjectError.unsupportedVersion(version) }
-        return try decoder.decode(ProjectManifest.self, from: data)
+        let supported = ProjectManifest.oldestSupportedVersion...ProjectManifest.currentVersion
+        guard supported.contains(version) else { throw ProjectError.unsupportedVersion(version) }
+        var manifest = try decoder.decode(ProjectManifest.self, from: data)
+        // Whatever it was written as, it is this format now. Nothing is written
+        // back until the project is next edited.
+        manifest.version = ProjectManifest.currentVersion
+        return manifest
     }
 
     /// A place for a new project called `name` inside `root` that isn't taken:
