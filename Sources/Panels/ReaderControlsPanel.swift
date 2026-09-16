@@ -19,9 +19,10 @@ struct ReaderControlsPanel: View {
     /// headroom for the raised spread, the gap, and the page number (22).
     private static let chrome: CGFloat = 121 + 22
     private static let currentScale: CGFloat = 1.12
-    /// How many rows of pages the expanded grid fits in its height; the
-    /// column width follows from that and the page's own shape.
-    private static let visibleGridRows: CGFloat = 3
+    /// How many pages the expanded grid puts across. Everything else — how
+    /// big a page is, how many rows there are — follows from this and the
+    /// comic's own page shape.
+    private static let gridColumns: CGFloat = 3
     private static let cornerRadius: CGFloat = 24
 
     /// Sized from the room left over, so no gap can open up below the strip.
@@ -212,20 +213,18 @@ struct ReaderControlsPanel: View {
     private var pageGrid: some View {
         GeometryReader { geometry in
             let spacing: CGFloat = 18
-            // What sits under each page: the gap and the number.
-            let caption: CGFloat = 6 + 14
-            let rows = Self.visibleGridRows
-            let rowHeight = max(90, (geometry.size.height - spacing * (rows - 1)) / rows)
-            let pageHeight = rowHeight - caption
-            // One page's shape, from the comic itself where we know it.
+            let columns = Self.gridColumns
+            // Width decides everything: how many across is what's being asked
+            // for, and a page's height follows from its own shape.
+            let cellWidth = max(90, (geometry.size.width - spacing * (columns - 1) - 16) / columns)
             let pageAspect = (model.spreadAspect ?? 1.414) / 2
-            let cellWidth = max(90, pageHeight * pageAspect)
+            let pageHeight = cellWidth / pageAspect
 
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: cellWidth, maximum: cellWidth),
-                                           spacing: spacing, alignment: .top)],
+                        columns: Array(repeating: GridItem(.fixed(cellWidth), spacing: spacing, alignment: .top),
+                                       count: Int(columns)),
                         alignment: .center,
                         spacing: spacing
                     ) {
