@@ -26,6 +26,9 @@ struct ScriptEditorView: NSViewRepresentable {
         scrollView.documentView = textView
         let model = model
         textView.onFocusChange = { editing in model.isScriptEditing = editing }
+        let coordinator = context.coordinator
+        textView.markdown = { [weak coordinator] range in coordinator?.markdown(of: range) ?? "" }
+        textView.attributedString = { [weak coordinator] markdown in coordinator?.render(markdown) ?? NSAttributedString() }
         textView.delegate = context.coordinator
         textView.isRichText = true
         textView.allowsUndo = true
@@ -96,7 +99,7 @@ struct ScriptEditorView: NSViewRepresentable {
 
         // MARK: Markdown → text
 
-        private func render(_ markdown: String) -> NSAttributedString {
+        func render(_ markdown: String) -> NSAttributedString {
             let result = NSMutableAttributedString()
             let blocks = ScriptMarkdown.parse(markdown)
             for (index, block) in blocks.enumerated() {
@@ -142,6 +145,17 @@ struct ScriptEditorView: NSViewRepresentable {
 
         private func serialise() -> String {
             guard let storage = textView?.textStorage else { return project.script }
+            return markdown(of: storage)
+        }
+
+        /// A range of the text as Markdown — what a copy or a drag carries.
+        func markdown(of range: NSRange) -> String {
+            guard let storage = textView?.textStorage, range.location != NSNotFound,
+                  range.location + range.length <= storage.length else { return "" }
+            return markdown(of: storage.attributedSubstring(from: range))
+        }
+
+        private func markdown(of storage: NSAttributedString) -> String {
             var blocks: [ScriptBlock] = []
             let string = storage.string as NSString
             var location = 0
@@ -289,7 +303,43 @@ struct ScriptEditorView: NSViewRepresentable {
 /// Says when it has the keyboard, so the reader's own keys — space to turn
 /// the page, the arrows — stay out of the way while the writer types.
 final class ScriptTextView: NSTextView {
+    /// The selection as script Markdown. Chips have no bytes of their own,
+    /// so RTF loses them; Markdown carries them exactly — and it's what
+    /// drags, copies and pastes travel as, within the pane.
+    static let markdownType = NSPasteboard.PasteboardType("com.mida.panels.script-markdown")
+
     var onFocusChange: ((Bool) -> Void)?
+    var markdown: ((NSRange) -> String)?
+    var attributedString: ((String) -> NSAttributedString)?
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [Self.markdownType] + super.writablePasteboardTypes
+    }
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        [Self.markdownType] + super.readablePasteboardTypes
+    }
+
+    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == Self.markdownType, let markdown = markdown?(selectedRange()) {
+            pboard.setString(markdown, forType: type)
+            return true
+        }
+        return super.writeSelection(to: pboard, type: type)
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == Self.markdownType, let markdown = pboard.string(forType: type),
+           let piece = attributedString?(markdown) {
+            let range = rangeForUserTextChange
+            guard range.location != NSNotFound, shouldChangeText(in: range, replacementString: piece.string) else { return false }
+            textStorage?.replaceCharacters(in: range, with: piece)
+            didChangeText()
+            setSelectedRange(NSRange(location: range.location + piece.length, length: 0))
+            return true
+        }
+        return super.readSelection(from: pboard, type: type)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
