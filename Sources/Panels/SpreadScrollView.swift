@@ -91,6 +91,11 @@ final class SpreadScrollView: NSScrollView {
         pageView.setHighlights(pageURLs.map { byPage[$0] ?? [] })
     }
 
+    /// Shapes to outline after a jump, keyed by page file.
+    func setFocus(_ byPage: [URL: [[CGPoint]]]) {
+        pageView.setFocus(pageURLs.map { byPage[$0] ?? [] })
+    }
+
     func show(_ images: [NSImage]) {
         guard !pageView.isShowing(images) else { return }
         pageView.show(images, urls: pageURLs)
@@ -248,6 +253,7 @@ private final class SpreadDocumentView: NSView {
     /// One per page, over its image view, drawing the search hits.
     private var highlightViews: [HighlightOverlayView] = []
     private var pendingHighlights: [[CGRect]] = []
+    private var pendingFocus: [[[CGPoint]]] = []
     /// One per page, on top: the system's Live Text, so lettering can be
     /// selected and copied like text anywhere else on the Mac.
     private var liveTextViews: [ImageAnalysisOverlayView] = []
@@ -310,6 +316,7 @@ private final class SpreadDocumentView: NSView {
             return overlay
         }
         setHighlights(pendingHighlights)
+        setFocus(pendingFocus)
         setCapturing(isCapturing)
         frame = NSRect(origin: .zero, size: Self.naturalSize(of: images))
         needsLayout = true
@@ -331,6 +338,13 @@ private final class SpreadDocumentView: NSView {
     func setCapturing(_ capturing: Bool) {
         isCapturing = capturing
         captureViews.forEach { $0.isActive = capturing }
+    }
+
+    /// Outlines per page, aligned with `images`.
+    func setFocus(_ polygonsPerPage: [[[CGPoint]]]) {
+        pendingFocus = polygonsPerPage
+        for (view, polygons) in zip(highlightViews, polygonsPerPage) { view.polygons = polygons }
+        for view in highlightViews.dropFirst(polygonsPerPage.count) { view.polygons = [] }
     }
 
 
@@ -632,20 +646,27 @@ private final class HighlightOverlayView: NSView {
     /// Vision's boxes: unit rects with the origin at the image's bottom-left.
     /// Clearing them fades the paint out rather than snapping it away.
     var boxes: [CGRect] = [] {
-        didSet {
-            guard boxes != oldValue else { return }
-            if boxes.isEmpty {
-                fadeOut()
-            } else {
-                drawn = boxes
-                alphaValue = 1
-                needsDisplay = true
-            }
-        }
+        didSet { if boxes != oldValue { refresh() } }
+    }
+    /// Cited shapes to outline after a jump: unit coords, top-left origin.
+    var polygons: [[CGPoint]] = [] {
+        didSet { if polygons != oldValue { refresh() } }
     }
 
-    /// What's on screen — lags `boxes` while a fade is running.
+    /// What's on screen — lags the inputs while a fade is running.
     private var drawn: [CGRect] = []
+    private var drawnPolygons: [[CGPoint]] = []
+
+    private func refresh() {
+        if boxes.isEmpty && polygons.isEmpty {
+            fadeOut()
+        } else {
+            drawn = boxes
+            drawnPolygons = polygons
+            alphaValue = 1
+            needsDisplay = true
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -664,8 +685,9 @@ private final class HighlightOverlayView: NSView {
             // Animation completions land on the main thread; the compiler
             // just can't see it.
             MainActor.assumeIsolated {
-                guard let self, self.boxes.isEmpty else { return }
+                guard let self, self.boxes.isEmpty, self.polygons.isEmpty else { return }
                 self.drawn = []
+                self.drawnPolygons = []
                 self.needsDisplay = true
             }
         })
@@ -677,8 +699,22 @@ private final class HighlightOverlayView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard !drawn.isEmpty else { return }
         let size = bounds.size
+        for polygon in drawnPolygons where polygon.count >= 3 {
+            let path = NSBezierPath()
+            path.move(to: NSPoint(x: polygon[0].x * size.width, y: polygon[0].y * size.height))
+            for p in polygon.dropFirst() { path.line(to: NSPoint(x: p.x * size.width, y: p.y * size.height)) }
+            path.close()
+            NSColor.controlAccentColor.withAlphaComponent(0.16).setFill()
+            path.fill()
+            path.lineWidth = max(size.height * 0.003, 2) * 3
+            NSColor.white.withAlphaComponent(0.85).setStroke()
+            path.stroke()
+            path.lineWidth = max(size.height * 0.003, 2)
+            NSColor.controlAccentColor.setStroke()
+            path.stroke()
+        }
+        guard !drawn.isEmpty else { return }
         for box in drawn {
             // This view is flipped; Vision's y runs the other way.
             let rect = NSRect(

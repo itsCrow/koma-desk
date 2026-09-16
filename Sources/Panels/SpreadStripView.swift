@@ -13,6 +13,8 @@ struct SpreadStrip: NSViewRepresentable {
     let direction: ReadingDirection
     /// Search hits to draw over each page, keyed by page file.
     let highlights: [URL: [CGRect]]
+    /// Shapes to outline after a jump, keyed by page file.
+    let focus: [URL: [[CGPoint]]]
     /// Capture mode: pages take clicks and drags as captures.
     let isCapturing: Bool
     let panelsProvider: @MainActor (URL) async -> [DetectedPanel]
@@ -30,6 +32,7 @@ struct SpreadStrip: NSViewRepresentable {
         strip.onInteraction = onInteraction
         strip.onTap = onTap
         strip.highlights = highlights
+        strip.focus = focus
         strip.panelsProvider = panelsProvider
         strip.onCapture = onCapture
         strip.onEndCapture = onEndCapture
@@ -42,6 +45,7 @@ struct SpreadStrip: NSViewRepresentable {
         strip.onInteraction = onInteraction
         strip.onTap = onTap
         strip.highlights = highlights
+        strip.focus = focus
         strip.panelsProvider = panelsProvider
         strip.onCapture = onCapture
         strip.onEndCapture = onEndCapture
@@ -68,6 +72,12 @@ final class SpreadStripView: NSView {
         didSet {
             guard highlights != oldValue else { return }
             for panel in [leftPanel, centrePanel, rightPanel] { panel?.setHighlights(highlights) }
+        }
+    }
+    var focus: [URL: [[CGPoint]]] = [:] {
+        didSet {
+            guard focus != oldValue else { return }
+            for panel in [leftPanel, centrePanel, rightPanel] { panel?.setFocus(focus) }
         }
     }
 
@@ -208,6 +218,7 @@ final class SpreadStripView: NSView {
         panel.swipeCoordinator = self
         panel.onInteraction = { [weak self] in self?.onInteraction?() }
         panel.setHighlights(highlights)
+        panel.setFocus(focus)
         panel.captureHandlers = (
             panels: { [weak self] url in await self?.panelsProvider?(url) ?? [] },
             capture: { [weak self] url, shape in self?.onCapture?(url, shape) },

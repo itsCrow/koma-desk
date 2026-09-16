@@ -33,6 +33,20 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
+			<string>Panels Project</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSTypeIsPackage</key>
+			<true/>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.mida.panels.project</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
 			<string>Comic Book Archive</string>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
@@ -44,6 +58,28 @@
 				<string>cx.c3.cbz-archive</string>
 				<string>com.mida.panels.cb7-archive</string>
 			</array>
+		</dict>
+	</array>
+
+	<!-- A project is a folder Finder treats as one file. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.mida.panels.project</string>
+			<key>UTTypeDescription</key>
+			<string>Panels Project</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>panelsproject</string>
+				</array>
+			</dict>
 		</dict>
 	</array>
 

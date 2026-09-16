@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 import ComicArchive
 import PageSearch
 import PageCapture
+import PanelsProject
 
 /// What a capture covers.
 enum CaptureShape {
@@ -50,6 +51,16 @@ final class ReaderModel {
     var isCapturing = false
     /// Two pages are up and Save Page was asked for: the reader picks one.
     var isChoosingPageToSave = false
+
+    /// The open project, if any: the script lives beside the pages.
+    private(set) var project: Project?
+    /// Whether the script pane is shown when a project is open.
+    var showsScript: Bool {
+        didSet { UserDefaults.standard.set(showsScript, forKey: Self.showsScriptKey) }
+    }
+    /// Shapes to outline on pages after a jump, keyed by page file. Unit
+    /// coords, top-left origin. Cleared after a moment.
+    private(set) var focusOutlines: [URL: [[CGPoint]]] = [:]
     /// "Saved Berserk v01 p119 panel6.png · citation copied", briefly.
     var lastCaptureMessage: String?
     var searchQuery = "" {
@@ -68,6 +79,9 @@ final class ReaderModel {
             // Turning the page means you're done capturing from this one.
             isCapturing = false
             isChoosingPageToSave = false
+            if let project, let source, let ref = project.manifest.comic(for: source) {
+                project.manifest.positions[ref.id] = spreadIndex
+            }
         }
     }
 
@@ -87,13 +101,18 @@ final class ReaderModel {
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private let indexStore = TextIndexStore()
     @ObservationIgnored private var detectedPanels: [URL: [DetectedPanel]] = [:]
+    /// A citation to land on once the comic it's in has opened.
+    @ObservationIgnored private var pendingJump: Citation?
+    @ObservationIgnored private var focusTask: Task<Void, Never>?
 
     private static let directionKey = "PanelsReadingDirection"
+    private static let showsScriptKey = "PanelsShowsScript"
 
     init() {
         let stored = UserDefaults.standard.string(forKey: Self.directionKey)
         // Defaults to manga order.
         direction = stored.flatMap(ReadingDirection.init(rawValue:)) ?? .rightToLeft
+        showsScript = UserDefaults.standard.object(forKey: Self.showsScriptKey) as? Bool ?? true
     }
 
     var hasComic: Bool { !pages.isEmpty }
@@ -176,6 +195,15 @@ final class ReaderModel {
         prefetchNeighbours()
         NSDocumentController.shared.noteNewRecentDocumentURL(comic.source)
         startIndexing(comic)
+
+        if let project {
+            let ref = project.comicRef(for: comic.source, title: comic.title)
+            project.manifest.lastComicID = ref.id
+        }
+        if let jump = pendingJump, resolvedURL(forComicID: jump.comicID) == comic.source {
+            pendingJump = nil
+            land(on: jump)
+        }
     }
 
     func closeComic() {
@@ -323,14 +351,166 @@ final class ReaderModel {
         return ComicIdentity(fileURL: source).citation(pages: visiblePages.map(\.number))
     }
 
-    /// Puts the citation on the clipboard. Returns it, for the confirmation.
+    /// Cites what's on screen: into the script at the cursor when a project is
+    /// open, and onto the clipboard either way. Returns the text.
     @discardableResult
     func copyCitation() -> String? {
         guard let citation else { return nil }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(citation, forType: .string)
+        if let source, let pageIndex = visiblePages.map({ pageIndexByURL[$0.url] ?? 0 }).min() {
+            recordCitation(comicURL: source, pageIndex: pageIndex, pageNumbers: visiblePages.map(\.number),
+                           panel: nil, polygon: nil, region: nil, captureFile: nil, text: citation)
+        }
         return citation
+    }
+
+    // MARK: - Project
+
+    func newProject() {
+        let panel = NSSavePanel()
+        panel.title = "New Project"
+        panel.nameFieldStringValue = (title ?? "Untitled") + ".panelsproject"
+        panel.allowedContentTypes = [.panelsProject]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, var url = panel.url else { return }
+        if url.pathExtension != ProjectStore.packageExtension {
+            url = url.appendingPathExtension(ProjectStore.packageExtension)
+        }
+        do {
+            closeProject()
+            let created = try Project.create(at: url)
+            adopt(created)
+        } catch {
+            errorMessage = "Couldn’t create the project. \(error.localizedDescription)"
+        }
+    }
+
+    func presentOpenProjectPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Project"
+        panel.allowedContentTypes = [.panelsProject]
+        panel.treatsFilePackagesAsDirectories = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openProject(at: url)
+    }
+
+    func openProject(at url: URL) {
+        do {
+            closeProject()
+            let opened = try Project.open(url)
+            adopt(opened)
+            NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            // Pick up where the script left off.
+            if !hasComic, let lastID = opened.manifest.lastComicID,
+               let ref = opened.manifest.comic(id: lastID), let comicURL = opened.locate(ref) {
+                open(comicURL)
+            }
+        } catch {
+            errorMessage = "Couldn’t open the project. \(error.localizedDescription)"
+        }
+    }
+
+    private func adopt(_ project: Project) {
+        self.project = project
+        if let source, let title {
+            let ref = project.comicRef(for: source, title: title)
+            project.manifest.lastComicID = ref.id
+        }
+    }
+
+    func closeProject() {
+        project?.saveNow()
+        project = nil
+        pendingJump = nil
+        clearFocus()
+    }
+
+    func revealProject() {
+        guard let project else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([project.url])
+    }
+
+    func copyScriptAsPlainText() {
+        guard let project else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(project.plainTextScript, forType: .string)
+        lastCaptureMessage = "Script copied as plain text"
+    }
+
+    func format(_ command: ScriptCommand) {
+        project?.pendingCommand = command
+    }
+
+    /// Records a citation in the project and queues its chip for the script.
+    private func recordCitation(comicURL: URL, pageIndex: Int, pageNumbers: [Int], panel: Int?,
+                                polygon: [CGPoint]?, region: CGRect?, captureFile: String?, text: String) {
+        guard let project, let title else { return }
+        let ref = project.comicRef(for: comicURL, title: title)
+        let citation = Citation(comicID: ref.id, pageIndex: pageIndex, pageNumbers: pageNumbers, panel: panel,
+                                polygon: polygon, region: region, captureFile: captureFile, text: text)
+        project.add(citation)
+        project.pendingInsertion = citation
+    }
+
+    // MARK: - Jumping to a citation
+
+    /// Where a project comic is now, asking the reader if it can't be found.
+    private func resolvedURL(forComicID id: String) -> URL? {
+        guard let project, let ref = project.manifest.comic(id: id) else { return nil }
+        return project.locate(ref)
+    }
+
+    func jump(toCitation id: String) {
+        guard let project, let citation = project.citation(id: id) else { return }
+        var url = resolvedURL(forComicID: citation.comicID)
+        if url == nil, let ref = project.manifest.comic(id: citation.comicID) {
+            let panel = NSOpenPanel()
+            panel.title = "Locate “\(ref.filename)”"
+            panel.message = "The comic this citation points to isn’t where it was. Find it to continue."
+            panel.allowedContentTypes = Self.supportedContentTypes
+            guard panel.runModal() == .OK, let chosen = panel.url else { return }
+            project.comicRef(for: chosen, title: ref.title)  // updates the path
+            url = chosen
+        }
+        guard let url else { return }
+        if source == url {
+            land(on: citation)
+        } else {
+            pendingJump = citation
+            open(url)
+        }
+    }
+
+    private func land(on citation: Citation) {
+        guard let spread = spreads.firstIndex(where: { $0.pageIndices.contains(citation.pageIndex) }) else { return }
+        goTo(spread: spread)
+        guard pages.indices.contains(citation.pageIndex) else { return }
+        let page = pages[citation.pageIndex]
+        let outline: [CGPoint]
+        if let polygon = citation.polygon {
+            outline = polygon
+        } else if let region = citation.region {
+            outline = [CGPoint(x: region.minX, y: region.minY), CGPoint(x: region.maxX, y: region.minY),
+                       CGPoint(x: region.maxX, y: region.maxY), CGPoint(x: region.minX, y: region.maxY)]
+        } else {
+            outline = [CGPoint(x: 0.01, y: 0.01), CGPoint(x: 0.99, y: 0.01), CGPoint(x: 0.99, y: 0.99), CGPoint(x: 0.01, y: 0.99)]
+        }
+        focusOutlines = [page: [outline]]
+        focusTask?.cancel()
+        focusTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            self?.focusOutlines = [:]
+        }
+    }
+
+    private func clearFocus() {
+        focusTask?.cancel()
+        focusOutlines = [:]
     }
 
     // MARK: - Capturing for the editor
@@ -352,6 +532,7 @@ final class ReaderModel {
     }
 
     var capturesFolder: URL? {
+        if let project { return project.capturesFolder }
         guard let source else { return nil }
         return capturesRoot.appendingPathComponent(ComicIdentity(fileURL: source).series, isDirectory: true)
     }
@@ -454,7 +635,9 @@ final class ReaderModel {
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.setString(citation, forType: .string)
-                lastCaptureMessage = "Saved \(file) · citation copied"
+                lastCaptureMessage = project == nil ? "Saved \(file) · citation copied" : "Saved \(file) · cited in script"
+                recordCitation(comicURL: source, pageIndex: pageIndex, pageNumbers: [pageNumber], panel: panel,
+                               polygon: polygon, region: region, captureFile: file, text: citation)
             case .failure(let error):
                 lastCaptureMessage = "Couldn’t save the capture: \(error.localizedDescription)"
             }

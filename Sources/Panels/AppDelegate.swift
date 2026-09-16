@@ -15,13 +15,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Double-clicking a .cbr in Finder, or dropping one on the Dock icon.
+    /// Double-clicking a .cbr or a .panelsproject in Finder, or dropping one
+    /// on the Dock icon.
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard let url = urls.first(where: {
-            ReaderModel.supportedExtensions.contains($0.pathExtension.lowercased())
-        }) else { return }
         MainActor.assumeIsolated {
-            ReaderModel.shared.open(url)
+            if let project = urls.first(where: { $0.pathExtension.lowercased() == "panelsproject" }) {
+                ReaderModel.shared.openProject(at: project)
+            }
+            if let comic = urls.first(where: {
+                ReaderModel.supportedExtensions.contains($0.pathExtension.lowercased())
+            }) {
+                ReaderModel.shared.open(comic)
+            }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            ReaderModel.shared.closeProject()
         }
     }
 

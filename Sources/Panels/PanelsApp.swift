@@ -9,29 +9,52 @@ struct PanelsApp: App {
     var body: some Scene {
         Window("Panels", id: "reader") {
             ReaderView(model: model)
-                .background(WindowConfigurator(spreadAspect: model.spreadAspect))
         }
         // A two-page spread is about 1.4:1. The old default of 900x512 was
         // nearly 1.9:1, which letterboxed a quarter of the window into black.
         .defaultSize(width: 1280, height: 900)
         .windowToolbarStyle(.unifiedCompact)
         .commands {
-            // A reader has nothing to create.
             CommandGroup(replacing: .newItem) {
+                Button("New Project…") { model.newProject() }
+                    .keyboardShortcut("n")
+                Button("Open Project…") { model.presentOpenProjectPanel() }
+                    .keyboardShortcut("o", modifiers: [.command, .option])
                 Button("Open Comic…") { model.presentOpenPanel() }
                     .keyboardShortcut("o")
             }
 
             CommandGroup(after: .newItem) {
+                Divider()
+                Button("Close Project") { model.closeProject() }
+                    .disabled(model.project == nil)
                 Button("Close Comic") { model.closeComic() }
                     .keyboardShortcut("w", modifiers: [.command, .shift])
                     .disabled(!model.hasComic)
             }
 
-            CommandGroup(after: .pasteboard) {
-                Button("Copy Citation") { model.copyCitation() }
+            CommandMenu("Script") {
+                Button(model.project == nil ? "Copy Citation" : "Insert Citation") { model.copyCitation() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     .disabled(!model.hasComic)
+                Button(model.showsScript ? "Hide Script" : "Show Script") { model.showsScript.toggle() }
+                    .keyboardShortcut("s", modifiers: [.command, .option])
+                    .disabled(model.project == nil)
+                Divider()
+                Button("Heading 1") { model.format(.heading(1)) }
+                    .keyboardShortcut("1", modifiers: [.command, .option])
+                    .disabled(model.project == nil)
+                Button("Heading 2") { model.format(.heading(2)) }
+                    .keyboardShortcut("2", modifiers: [.command, .option])
+                    .disabled(model.project == nil)
+                Button("Body Text") { model.format(.body) }
+                    .keyboardShortcut("0", modifiers: [.command, .option])
+                    .disabled(model.project == nil)
+                Divider()
+                Button("Copy Script for Google Docs") { model.copyScriptAsPlainText() }
+                    .disabled(model.project == nil)
+                Button("Reveal Project in Finder") { model.revealProject() }
+                    .disabled(model.project == nil)
             }
 
             CommandMenu("Tools") {
@@ -82,10 +105,15 @@ struct PanelsApp: App {
 
 /// The window behaviour SwiftUI has no modifier for: chrome dark enough not to
 /// glare beside the black page area, and a window shaped like the comic.
-private struct WindowConfigurator: NSViewRepresentable {
+/// Sits as the background of the *page area*, so it can measure what the
+/// window holds besides pages — the toolbar above, the script pane beside.
+struct WindowConfigurator: NSViewRepresentable {
     /// Width-to-height of a two-page spread of the open comic, or nil when
     /// nothing is open.
     let spreadAspect: CGFloat?
+    /// Anything that changes what surrounds the page area — the script pane
+    /// shown or hidden — so the window is re-shaped.
+    let layoutKey: String
 
     /// Stands in front of SwiftUI's own window delegate, forwarding everything
     /// except resizing, which it constrains to the comic's shape.
@@ -99,7 +127,13 @@ private struct WindowConfigurator: NSViewRepresentable {
         var aspect: CGFloat?
         /// Height of the chrome inside the content view, above the pages.
         var chromeInset: CGFloat = 0
+        /// Width of the content view beside the page area: the script pane.
+        var sideInset: CGFloat = 0
         var appliedAspect: CGFloat?
+        var appliedLayoutKey = ""
+        /// True while our own setFrame is in flight, so the page area's
+        /// resize doesn't trigger another.
+        var isReshaping = false
 
         override func responds(to selector: Selector!) -> Bool {
             super.responds(to: selector) || forwardTo?.responds(to: selector) == true
@@ -120,16 +154,32 @@ private struct WindowConfigurator: NSViewRepresentable {
         @MainActor
         func shaped(_ frameSize: NSSize, for window: NSWindow, aspect: CGFloat) -> NSSize {
             let content = window.contentRect(forFrameRect: NSRect(origin: .zero, size: frameSize))
-            let size = NSSize(width: content.width, height: content.width / aspect + chromeInset)
+            let pageWidth = max(content.width - sideInset, 200)
+            let size = NSSize(width: content.width, height: pageWidth / aspect + chromeInset)
             return window.frameRect(forContentRect: NSRect(origin: .zero, size: size)).size
         }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+    /// Reports its own resizes: dragging the split divider changes the page
+    /// area without any window resize, and the window has to follow.
+    final class ReportingView: NSView {
+        var onResize: (() -> Void)?
+        override func setFrameSize(_ newSize: NSSize) {
+            let changed = newSize != frame.size
+            super.setFrameSize(newSize)
+            if changed { onResize?() }
+        }
+    }
+
+    func makeNSView(context: Context) -> ReportingView {
+        let view = ReportingView()
         let coordinator = context.coordinator
+        view.onResize = { [weak view, weak coordinator] in
+            guard let view, let coordinator, let window = view.window else { return }
+            DispatchQueue.main.async { follow(window, from: view, coordinator) }
+        }
         DispatchQueue.main.async {
             guard let window = view.window else { return }
             window.appearance = NSAppearance(named: .darkAqua)
@@ -140,7 +190,7 @@ private struct WindowConfigurator: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
+    func updateNSView(_ view: ReportingView, context: Context) {
         let coordinator = context.coordinator
         DispatchQueue.main.async {
             guard let window = view.window else { return }
@@ -148,29 +198,51 @@ private struct WindowConfigurator: NSViewRepresentable {
         }
     }
 
+    /// The page area's surroundings, measured from where this view sits.
+    private func measure(_ window: NSWindow, from view: NSView, _ coordinator: Coordinator) {
+        guard let content = window.contentView else { return }
+        let pageArea = view.convert(view.bounds, to: content)
+        coordinator.chromeInset = max(content.bounds.height - pageArea.height, 0)
+        coordinator.sideInset = max(content.bounds.width - pageArea.width, 0)
+    }
+
     /// Locks the page area to the spread's shape and resizes the window to
     /// match, so a two-page spread fills it edge to edge with no letterbox
     /// either side. With the shape fixed, dragging a corner scales the pages
     /// rather than uncovering black.
     private func shape(_ window: NSWindow, from view: NSView, _ coordinator: Coordinator) {
-        guard coordinator.appliedAspect != spreadAspect else { return }
+        guard coordinator.appliedAspect != spreadAspect || coordinator.appliedLayoutKey != layoutKey else { return }
         coordinator.appliedAspect = spreadAspect
+        coordinator.appliedLayoutKey = layoutKey
 
         if window.delegate !== coordinator {
             coordinator.forwardTo = window.delegate
             window.delegate = coordinator
         }
-        // This view is the reader's background, so its frame *is* the page
-        // area; whatever the content view has above it is chrome.
-        if let content = window.contentView {
-            let pageArea = view.convert(view.bounds, to: content)
-            coordinator.chromeInset = max(content.bounds.height - pageArea.height, 0)
-        }
+        measure(window, from: view, coordinator)
         coordinator.aspect = spreadAspect
 
         guard let aspect = spreadAspect, aspect > 0,
               !window.styleMask.contains(.fullScreen) else { return }
+        coordinator.isReshaping = true
         window.setFrame(frame(for: window, aspect: aspect, coordinator), display: true, animate: true)
+        coordinator.isReshaping = false
+    }
+
+    /// The page area changed size on its own — the divider moved. Re-measure
+    /// and, if the pages no longer have the spread's shape, fix the window.
+    private func follow(_ window: NSWindow, from view: NSView, _ coordinator: Coordinator) {
+        guard !coordinator.isReshaping, let aspect = coordinator.aspect, aspect > 0,
+              !window.styleMask.contains(.fullScreen) else { return }
+        measure(window, from: view, coordinator)
+        let target = coordinator.shaped(window.frame.size, for: window, aspect: aspect)
+        guard abs(target.height - window.frame.height) > 1 else { return }
+        coordinator.isReshaping = true
+        var frame = window.frame
+        frame.origin.y = frame.maxY - target.height
+        frame.size = target
+        window.setFrame(frame, display: true, animate: false)
+        coordinator.isReshaping = false
     }
 
     /// The window's current width, at the spread's shape, kept on screen and

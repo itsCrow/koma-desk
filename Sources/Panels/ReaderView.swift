@@ -14,22 +14,17 @@ struct ReaderView: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-
-            if model.hasComic {
-                spread
+        Group {
+            if let project = model.project, model.showsScript {
+                HSplitView {
+                    pageArea
+                        .frame(minWidth: 480)
+                    ScriptEditorView(project: project, model: model)
+                        .frame(minWidth: 280, idealWidth: 420, maxWidth: 700)
+                }
             } else {
-                EmptyStateView { model.presentOpenPanel() }
+                pageArea
             }
-
-            if model.isLoading {
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(.white)
-            }
-
-            overlays
         }
         .frame(minWidth: 640, minHeight: 480)
         .navigationTitle(model.title ?? "Panels")
@@ -121,12 +116,37 @@ struct ReaderView: View {
 
     // MARK: - Pages
 
+    private var pageArea: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if model.hasComic {
+                spread
+            } else {
+                EmptyStateView { model.presentOpenPanel() }
+            }
+
+            if model.isLoading {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(.white)
+            }
+
+            overlays
+        }
+        .background(WindowConfigurator(
+            spreadAspect: model.spreadAspect,
+            layoutKey: model.project != nil && model.showsScript ? "script" : "pages"
+        ))
+    }
+
     private var spread: some View {
         SpreadStrip(
             model: model,
             spreadIndex: model.spreadIndex,
             direction: model.direction,
             highlights: highlightsOnPages,
+            focus: model.focusOutlines,
             isCapturing: model.isCapturing,
             panelsProvider: { url in await model.panels(on: url) },
             onCapture: { url, shape in model.capture(page: url, shape: shape) },
