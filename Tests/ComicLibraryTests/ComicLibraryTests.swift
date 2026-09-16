@@ -91,4 +91,42 @@ struct LibraryScannerTests {
         #expect(back.series(containing: item)?.name == "Berserk")
         #expect(LibraryStore.load(from: root.appendingPathComponent("nowhere")) == LibraryIndex())
     }
+
+    @Test("Arcs keep their folder order even though chapter numbers restart in each")
+    func arcsFollowFolderOrder() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-arcs-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        func make(_ path: String) throws {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 0, count: 8).write(to: url)
+        }
+
+        // The real shape of the Dragon Ball collection: numbered arc folders,
+        // and chapter numbering that starts over inside each one. Sorting by
+        // chapter number across the series would interleave them.
+        try make("Dragon Ball + Super/01 Dragon Balls Quest Arc/Chapter 001 - Bloomers and Son Goku.cbr")
+        try make("Dragon Ball + Super/01 Dragon Balls Quest Arc/Chapter 019 - The Dragon Finally Appears.cbr")
+        try make("Dragon Ball + Super/02 Turtle School Training Arc/Chapter 024 - Kame Sen'nin's Training Fee.cbr")
+        try make("Dragon Ball + Super/14 Battle of Gods Arc/Chapter 000 - Yo Son Goku and Friends Return.cbr")
+        try make("Dragon Ball + Super/16 Future Trunks Arc/Chapter 014 - SOS from the Future.cbr")
+        try make("Dragon Ball + Super/16 Future Trunks Arc/Chapter 019 - Another Zamas.cbr")
+
+        let series = try #require(LibraryScanner.scan(roots: [root]).first)
+
+        // Every arc is contiguous and in folder order, so the contents list
+        // shows each arc once rather than over and over.
+        #expect(series.arcs.map(\.name) == ["01 Dragon Balls Quest Arc",
+                                            "02 Turtle School Training Arc",
+                                            "14 Battle of Gods Arc",
+                                            "16 Future Trunks Arc"])
+        // Within an arc, chapters still run by number.
+        #expect(series.arcs[0].items.map(\.chapter) == [1, 19])
+        #expect(series.arcs[3].items.map(\.chapter) == [14, 19])
+        // Arc 14's Chapter 000 does not jump to the front of the series.
+        #expect(series.items.first?.chapter == 1)
+        #expect(series.items.map(\.chapter) == [1, 19, 24, 0, 14, 19])
+    }
 }

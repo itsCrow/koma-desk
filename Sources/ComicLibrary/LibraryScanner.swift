@@ -53,8 +53,18 @@ public enum LibraryScanner {
         return folderReadsAs == series ? nil : parent.lastPathComponent
     }
 
-    /// Volumes by number, then chapters by number, then whatever's left by name.
+    /// Folder order first, then numbers inside a folder.
+    ///
+    /// How the files sit on disk is the collection's own ordering and it wins.
+    /// A chapter number can only be trusted against its neighbours in the same
+    /// folder, because numbering restarts in every arc: Dragon Ball's
+    /// "01 Dragon Balls Quest Arc" opens at Chapter 001 and so does
+    /// "16 Future Trunks Arc" at Chapter 014. Sorting the whole series by
+    /// number interleaves every arc with every other.
     static func precedes(_ a: LibraryItem, _ b: LibraryItem) -> Bool {
+        let folderA = a.url.deletingLastPathComponent().path
+        let folderB = b.url.deletingLastPathComponent().path
+        if folderA != folderB { return naturalPrecedes(folderA, folderB) }
         switch (a.volume, b.volume) {
         case let (x?, y?) where x != y: return x < y
         case (.some, .none): return true
