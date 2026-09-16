@@ -146,6 +146,39 @@ public enum ScriptMarkdown {
         return out
     }
 
+    /// The citation ids in the order they appear in the script, each once.
+    /// A citation's place in the video is where it first appears.
+    public static func citationIDs(in markdown: String) -> [String] {
+        var seen = Set<String>()
+        var order: [String] = []
+        for block in parse(markdown) {
+            for run in block.inlines {
+                if case .citation(let id, _) = run, seen.insert(id).inserted {
+                    order.append(id)
+                }
+            }
+        }
+        return order
+    }
+
+    /// The text of the line a citation sits in, without its chips — the
+    /// sentence around a shot, for a shot list.
+    public static func context(of id: String, in markdown: String) -> String? {
+        for block in parse(markdown) {
+            let runs = block.inlines
+            guard runs.contains(where: { if case .citation(let found, _) = $0 { return found == id }; return false })
+            else { continue }
+            let text = runs.map { run -> String in
+                if case .text(let s) = run { return s }
+                return " "
+            }.joined()
+            // Chips leave gaps behind; the sentence should read as one.
+            return text.replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
     // MARK: - Plain text
 
     /// For pasting somewhere that isn't the app: chips become their text.

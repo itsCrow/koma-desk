@@ -22,6 +22,8 @@ final class Project {
     var pendingInsertion: Citation?
     /// A formatting command for the editor's current paragraph.
     var pendingCommand: ScriptCommand?
+    /// A citation the editor should scroll to and select.
+    var pendingReveal: String?
 
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
@@ -90,12 +92,58 @@ final class Project {
     /// Where a referenced comic is now: its recorded path, or beside the
     /// project, or in a `comics` folder inside it.
     func locate(_ ref: ComicRef) -> URL? {
+        let beside = url.deletingLastPathComponent()
         let candidates = [
             URL(fileURLWithPath: ref.path),
-            url.deletingLastPathComponent().appendingPathComponent(ref.filename),
+            beside.appendingPathComponent(ref.filename),
             url.appendingPathComponent("comics").appendingPathComponent(ref.filename),
         ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+        if let found = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+            return found
+        }
+        // One level down from the project's own folder, which covers a shared
+        // folder holding the project and a folder of comics beside it.
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(at: beside, includingPropertiesForKeys: [.isDirectoryKey],
+                                                             options: [.skipsHiddenFiles])
+        else { return nil }
+        for entry in entries where (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            let candidate = entry.appendingPathComponent(ref.filename)
+            if manager.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
+
+    /// Comics this project references that aren't on this Mac.
+    var missingComics: [ComicRef] {
+        manifest.comics.filter { locate($0) == nil }
+    }
+
+    /// The citations in the order they appear in the script — the order the
+    /// video runs, which is not the order they were made in.
+    var citationsInScriptOrder: [Citation] {
+        let byID = Dictionary(manifest.citations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ScriptMarkdown.citationIDs(in: script).compactMap { byID[$0] }
+    }
+
+    /// Citations no longer anywhere in the script. Deleting a chip leaves the
+    /// citation behind, so without this they pile up unseen.
+    var unusedCitations: [Citation] {
+        let used = Set(ScriptMarkdown.citationIDs(in: script))
+        return manifest.citations.filter { !used.contains($0.id) }
+    }
+
+    func removeCitation(id: String) {
+        manifest.citations.removeAll { $0.id == id }
+    }
+
+    /// The sentence a citation sits in.
+    func context(of id: String) -> String? {
+        ScriptMarkdown.context(of: id, in: script)
+    }
+
+    func captureURL(for citation: Citation) -> URL? {
+        citation.captureFile.map { capturesFolder.appendingPathComponent($0) }
     }
 
     /// The script with chips as plain text, for pasting somewhere else.

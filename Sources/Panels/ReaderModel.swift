@@ -76,6 +76,8 @@ final class ReaderModel {
     var showsScript: Bool {
         didSet { UserDefaults.standard.set(showsScript, forKey: Self.showsScriptKey) }
     }
+    /// The script pane is showing the shot list rather than the writing.
+    var showsShotList = false
     var scriptPlacement: ScriptPlacement {
         didSet { UserDefaults.standard.set(scriptPlacement.rawValue, forKey: Self.scriptPlacementKey) }
     }
@@ -450,6 +452,90 @@ final class ReaderModel {
         project = nil
         pendingJump = nil
         clearFocus()
+    }
+
+    /// A shot picked from the list: go to its page, and show where it sits
+    /// in the script.
+    func revealShot(_ citation: Citation) {
+        project?.pendingReveal = citation.id
+        jump(toCitation: citation.id)
+    }
+
+    /// Comics this project references that aren't on this Mac.
+    var missingComics: [ComicRef] { project?.missingComics ?? [] }
+
+    /// Asks for a missing comic and records where it is. The file has to be
+    /// the same one: a different release has different pages, so every
+    /// citation would land somewhere else.
+    func locateComic(_ ref: ComicRef) {
+        guard let project else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Locate “\(ref.filename)”"
+        panel.message = "Find your copy of “\(ref.filename)”. It must be the same file this script was written against."
+        panel.allowedContentTypes = Self.supportedContentTypes
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let chosen = panel.url else { return }
+
+        let size = (try? chosen.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        guard chosen.lastPathComponent == ref.filename || size == ref.fileSize else {
+            errorMessage = """
+                That doesn’t look like the same comic.
+
+                The script cites “\(ref.filename)” (\(ByteCountFormatter.string(fromByteCount: Int64(ref.fileSize), countStyle: .file))),                 but “\(chosen.lastPathComponent)” is \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)).                 A different release has different pages, so the citations would point at the wrong ones.
+                """
+            return
+        }
+        project.comicRef(for: chosen, title: ref.title)
+        if !hasComic { open(chosen) }
+    }
+
+    // MARK: - Shots as files
+
+    /// Writes the captures as numbered copies in script order, so a folder
+    /// dragged into an editor lands in the order the video runs. Copies, not
+    /// renames: the project's own files keep the names it refers to.
+    func exportShots() {
+        guard let project else { return }
+        let shots = project.citationsInScriptOrder
+        guard !shots.isEmpty else {
+            errorMessage = "There are no citations in the script yet."
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "Export Shots"
+        panel.nameFieldStringValue = "\(project.name) Shots"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var lines: [String] = ["\(project.name) — \(shots.count) shots", ""]
+            for (index, citation) in shots.enumerated() {
+                let number = String(format: "%02d", index + 1)
+                var filename = "\(number)_(no capture)"
+                if let source = project.captureURL(for: citation),
+                   FileManager.default.fileExists(atPath: source.path) {
+                    let stem = source.deletingPathExtension().lastPathComponent
+                        .replacingOccurrences(of: " ", with: "_")
+                    filename = "\(number)_\(stem).\(source.pathExtension)"
+                    let destination = folder.appendingPathComponent(filename)
+                    try? FileManager.default.removeItem(at: destination)
+                    try FileManager.default.copyItem(at: source, to: destination)
+                }
+                lines.append("\(number). \(citation.text)")
+                lines.append("    \(filename)")
+                if let context = project.context(of: citation.id), !context.isEmpty {
+                    lines.append("    \(context)")
+                }
+                lines.append("")
+            }
+            try lines.joined(separator: "\n").write(to: folder.appendingPathComponent("Shots.txt"),
+                                                    atomically: true, encoding: .utf8)
+            NSWorkspace.shared.activateFileViewerSelecting([folder])
+            lastCaptureMessage = "Exported \(shots.count) shots"
+        } catch {
+            errorMessage = "Couldn’t export the shots. \(error.localizedDescription)"
+        }
     }
 
     func revealProject() {

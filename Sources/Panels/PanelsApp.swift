@@ -40,6 +40,9 @@ struct PanelsApp: App {
                 Button(model.showsScript ? "Hide Script" : "Show Script") { model.showsScript.toggle() }
                     .keyboardShortcut("s", modifiers: [.command, .option])
                     .disabled(model.project == nil)
+                Button(model.showsShotList ? "Show Writing" : "Show Shot List") { model.showsShotList.toggle() }
+                    .keyboardShortcut("l", modifiers: [.command, .option])
+                    .disabled(model.project == nil)
                 Picker("Script Position", selection: $model.scriptPlacement) {
                     ForEach(ScriptPlacement.allCases, id: \.self) { placement in
                         Text(placement.label).tag(placement)
@@ -58,6 +61,8 @@ struct PanelsApp: App {
                     .disabled(model.project == nil)
                 Divider()
                 Button("Copy Script for Google Docs") { model.copyScriptAsPlainText() }
+                    .disabled(model.project == nil)
+                Button("Export Shots…") { model.exportShots() }
                     .disabled(model.project == nil)
                 Button("Reveal Project in Finder") { model.revealProject() }
                     .disabled(model.project == nil)

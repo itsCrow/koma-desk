@@ -58,6 +58,43 @@ struct ScriptMarkdownTests {
     }
 }
 
+@Suite("Citation order in a script")
+struct CitationOrderTests {
+    @Test("Ids come back in the order they appear, not the order they were made")
+    func order() {
+        let script = """
+        # Opening
+        The bear falls [third](panels://cite/ccc333).
+        Then [first](panels://cite/aaa111) and [second](panels://cite/bbb222).
+        """
+        #expect(ScriptMarkdown.citationIDs(in: script) == ["ccc333", "aaa111", "bbb222"])
+    }
+
+    @Test("A citation used twice counts once, at its first appearance")
+    func duplicates() {
+        let script = "A [x](panels://cite/xxx111) then B [y](panels://cite/yyy222) then A again [x](panels://cite/xxx111)."
+        #expect(ScriptMarkdown.citationIDs(in: script) == ["xxx111", "yyy222"])
+    }
+
+    @Test("A script with no citations, and prose that merely looks like one")
+    func none() {
+        #expect(ScriptMarkdown.citationIDs(in: "Just words.").isEmpty)
+        #expect(ScriptMarkdown.citationIDs(in: "See [docs](https://example.com).").isEmpty)
+        #expect(ScriptMarkdown.citationIDs(in: "").isEmpty)
+    }
+
+    @Test("The line around a citation, chips stripped")
+    func context() {
+        let script = """
+        # Title
+        Guts swings [Berserk, p. 5](panels://cite/aaa111) and the bear falls.
+        Another line.
+        """
+        #expect(ScriptMarkdown.context(of: "aaa111", in: script) == "Guts swings and the bear falls.")
+        #expect(ScriptMarkdown.context(of: "missing", in: script) == nil)
+    }
+}
+
 @Suite("Project store")
 struct ProjectStoreTests {
     @Test("Create, save and load a project folder")

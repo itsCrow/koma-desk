@@ -68,6 +68,53 @@ struct ReaderProjectTests {
         model.closeProject()
     }
 
+    @Test("Shots come back in script order, and a deleted chip leaves an unused citation")
+    func shotOrder() throws {
+        let projectURL = try Self.scratchProject()
+        defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+        let project = try Project.open(projectURL)
+
+        // Three citations, made in one order...
+        let comic = ComicRef(title: "Berserk", path: "/x/b.cbz", filename: "b.cbz", fileSize: 1)
+        project.manifest.comics = [comic]
+        let first = Citation(comicID: comic.id, pageIndex: 10, pageNumbers: [11], text: "first")
+        let second = Citation(comicID: comic.id, pageIndex: 20, pageNumbers: [21], text: "second")
+        let third = Citation(comicID: comic.id, pageIndex: 30, pageNumbers: [31], text: "third")
+        project.manifest.citations = [first, second, third]
+
+        // ...and written into the script in another, with one left out.
+        project.script = """
+        # Beat one
+        The bear falls [third](panels://cite/\(third.id)) and then [first](panels://cite/\(first.id)).
+        """
+
+        #expect(project.citationsInScriptOrder.map(\.text) == ["third", "first"])
+        #expect(project.unusedCitations.map(\.text) == ["second"])
+        #expect(project.context(of: third.id) == "The bear falls and then .")
+
+        project.removeCitation(id: second.id)
+        #expect(project.unusedCitations.isEmpty)
+        #expect(project.manifest.citations.count == 2)
+    }
+
+    @Test("A comic that isn't on this Mac is reported, and found again beside the project")
+    func missingComic() throws {
+        let projectURL = try Self.scratchProject()
+        let parent = projectURL.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let project = try Project.open(projectURL)
+
+        project.manifest.comics = [ComicRef(title: "Berserk", path: "/gone/b.cbz", filename: "b.cbz", fileSize: 4)]
+        #expect(project.missingComics.count == 1)
+
+        // Dropped in a folder beside the project, as a shared folder would be.
+        let comics = parent.appendingPathComponent("Comics", isDirectory: true)
+        try FileManager.default.createDirectory(at: comics, withIntermediateDirectories: true)
+        try Data(repeating: 0, count: 4).write(to: comics.appendingPathComponent("b.cbz"))
+        #expect(project.missingComics.isEmpty)
+        #expect(project.locate(project.manifest.comics[0])?.lastPathComponent == "b.cbz")
+    }
+
     @Test("A capture in a project lands in its captures folder as a citation with its shape")
     func captureIntoProject() async throws {
         guard let path = Self.comicPath else {

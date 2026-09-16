@@ -70,6 +70,10 @@ struct ScriptEditorView: NSViewRepresentable {
             coordinator.apply(command)
             project.pendingCommand = nil
         }
+        if let id = project.pendingReveal {
+            coordinator.reveal(id)
+            project.pendingReveal = nil
+        }
     }
 
     // MARK: - Coordinator
@@ -316,6 +320,23 @@ struct ScriptEditorView: NSViewRepresentable {
             return ScriptStyle.Paragraph(rawValue: raw ?? "") ?? .body
         }
 
+        /// Scrolls to a citation's chip and selects it, so a shot picked from
+        /// the list shows where it sits in the writing.
+        func reveal(_ id: String) {
+            guard let textView, let storage = textView.textStorage else { return }
+            var found: NSRange?
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length), options: []) { value, range, stop in
+                if (value as? CitationAttachment)?.citationID == id {
+                    found = range
+                    stop.pointee = true
+                }
+            }
+            guard let found else { return }
+            textView.setSelectedRange(found)
+            textView.scrollRangeToVisible(found)
+            textView.showFindIndicator(for: found)
+        }
+
         // MARK: Hover preview
 
         private var preview: NSPopover?
@@ -494,6 +515,8 @@ final class ScriptTextView: NSTextView {
 
 enum ScriptStyle {
     static let background = NSColor(calibratedWhite: 0.12, alpha: 1)
+    static var backgroundColor: Color { Color(nsColor: background) }
+    static var headerBackground: Color { Color(nsColor: NSColor(calibratedWhite: 0.16, alpha: 1)) }
     static let paragraphKey = NSAttributedString.Key("panels.paragraph")
 
     enum Paragraph: String {

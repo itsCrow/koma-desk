@@ -16,7 +16,7 @@ struct ReaderView: View {
     var body: some View {
         Group {
             if let project = model.project, model.showsScript {
-                let editor = ScriptEditorView(project: project, model: model)
+                let editor = ScriptPaneView(model: model, project: project)
                 switch model.scriptPlacement {
                 case .right:
                     HSplitView {
@@ -227,6 +227,9 @@ struct ReaderView: View {
                 if let warning = model.warning {
                     WarningBanner(text: warning)
                 }
+                ForEach(model.missingComics, id: \.id) { ref in
+                    MissingComicBanner(filename: ref.filename) { model.locateComic(ref) }
+                }
                 if model.isCapturing {
                     HStack(spacing: 14) {
                         Label("Click to place corners around a panel · click the first corner or press Return to capture · Esc when done",
@@ -379,6 +382,32 @@ private struct PageChooser: View {
                 Spacer()
             }
         }
+    }
+}
+
+/// A comic the script cites that isn't on this Mac — said plainly, rather
+/// than found out when a citation is clicked.
+private struct MissingComicBanner: View {
+    let filename: String
+    let locate: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "questionmark.folder")
+            Text("“\(filename)” isn’t on this Mac")
+                .lineLimit(1)
+            Button("Locate…", action: locate)
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(.white.opacity(0.22), in: Capsule())
+        }
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .glassPanel(cornerRadius: 12)
     }
 }
 
