@@ -133,8 +133,52 @@ final class Project {
         return manifest.citations.filter { !used.contains($0.id) }
     }
 
+    /// Forgets a citation and sends its capture to the Trash — recoverable,
+    /// rather than gone.
     func removeCitation(id: String) {
+        let doomed = manifest.citations.first { $0.id == id }.flatMap(captureURL(for:))
         manifest.citations.removeAll { $0.id == id }
+        if let doomed, !isCaptureInUse(doomed.lastPathComponent) {
+            try? FileManager.default.trashItem(at: doomed, resultingItemURL: nil)
+        }
+    }
+
+    /// Whether any citation still in the script points at this file.
+    private func isCaptureInUse(_ filename: String) -> Bool {
+        citationsInScriptOrder.contains { $0.captureFile == filename }
+    }
+
+    /// Capture files the script has no use for: those belonging to citations
+    /// whose chip was deleted, and those belonging to no citation at all —
+    /// whole pages saved automatically beside panels, before that stopped.
+    var unusedCaptureFiles: [URL] {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(
+            at: capturesFolder, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
+        let needed = Set(citationsInScriptOrder.compactMap(\.captureFile))
+        return entries.filter { $0.pathExtension.lowercased() == "png" && !needed.contains($0.lastPathComponent) }
+    }
+
+    var unusedCaptureBytes: Int64 {
+        unusedCaptureFiles.reduce(0) { total, url in
+            total + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+    }
+
+    /// Sends every unused capture to the Trash and forgets the citations that
+    /// are no longer in the script. Returns what went.
+    @discardableResult
+    func cleanUpUnusedCaptures() -> (files: Int, bytes: Int64) {
+        let doomed = unusedCaptureFiles
+        let bytes = unusedCaptureBytes
+        var trashed = 0
+        for url in doomed {
+            if (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil { trashed += 1 }
+        }
+        let used = Set(ScriptMarkdown.citationIDs(in: script))
+        manifest.citations.removeAll { !used.contains($0.id) }
+        return (trashed, bytes)
     }
 
     /// The sentence a citation sits in.

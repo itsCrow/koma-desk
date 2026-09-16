@@ -58,6 +58,10 @@ struct ShotListView: View {
     @Bindable var model: ReaderModel
     let project: Project
 
+    private var sizeText: String {
+        ByteCountFormatter.string(fromByteCount: project.unusedCaptureBytes, countStyle: .file)
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -81,13 +85,27 @@ struct ShotListView: View {
                 }
 
                 let unused = project.unusedCitations
-                if !unused.isEmpty {
-                    Text("Not in the script")
+                let strayFiles = project.unusedCaptureFiles
+                if !unused.isEmpty || !strayFiles.isEmpty {
+                    HStack {
+                        Text("Not in the script")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.45))
+                        Spacer()
+                        Button("Clean Up (\(strayFiles.count) files, \(sizeText))") {
+                            model.cleanUpUnusedCaptures()
+                        }
+                        .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.45))
-                        .padding(.horizontal, 14)
-                        .padding(.top, 18)
-                        .padding(.bottom, 6)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.white.opacity(0.14), in: Capsule())
+                        .help("Moves captures the script doesn't use to the Trash")
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 18)
+                    .padding(.bottom, 6)
                     ForEach(unused, id: \.id) { citation in
                         HStack(spacing: 10) {
                             Text(citation.text)

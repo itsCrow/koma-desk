@@ -489,6 +489,18 @@ final class ReaderModel {
         if !hasComic { open(chosen) }
     }
 
+    /// Sends captures the script doesn't use to the Trash.
+    func cleanUpUnusedCaptures() {
+        guard let project else { return }
+        let gone = project.cleanUpUnusedCaptures()
+        guard gone.files > 0 else {
+            lastCaptureMessage = "Nothing to clean up"
+            return
+        }
+        let size = ByteCountFormatter.string(fromByteCount: gone.bytes, countStyle: .file)
+        lastCaptureMessage = "Moved \(gone.files) unused capture\(gone.files == 1 ? "" : "s") to the Trash · \(size)"
+    }
+
     // MARK: - Shots as files
 
     /// Writes the captures as numbered copies in script order, so a folder

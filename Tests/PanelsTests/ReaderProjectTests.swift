@@ -97,6 +97,60 @@ struct ReaderProjectTests {
         #expect(project.manifest.citations.count == 2)
     }
 
+    @Test("Cleaning up trashes only what the script doesn't use")
+    func cleanUp() throws {
+        let projectURL = try Self.scratchProject()
+        defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+        let project = try Project.open(projectURL)
+        let comic = ComicRef(title: "B", path: "/x/b.cbz", filename: "b.cbz", fileSize: 1)
+        project.manifest.comics = [comic]
+
+        func writeCapture(_ name: String) throws {
+            try Data(repeating: 7, count: 2048).write(to: project.capturesFolder.appendingPathComponent(name))
+        }
+        // One cited, one whose chip was deleted, one belonging to no citation
+        // at all — a page saved automatically beside a panel, as used to happen.
+        try writeCapture("kept.png")
+        try writeCapture("orphan.png")
+        try writeCapture("stray.png")
+        let kept = Citation(comicID: comic.id, pageIndex: 1, pageNumbers: [2], captureFile: "kept.png", text: "kept")
+        let orphan = Citation(comicID: comic.id, pageIndex: 5, pageNumbers: [6], captureFile: "orphan.png", text: "orphan")
+        project.manifest.citations = [kept, orphan]
+        project.script = "Only [kept](panels://cite/\(kept.id)) is in the script."
+
+        #expect(Set(project.unusedCaptureFiles.map(\.lastPathComponent)) == ["orphan.png", "stray.png"])
+        #expect(project.unusedCaptureBytes == 4096)
+
+        let gone = project.cleanUpUnusedCaptures()
+        #expect(gone.files == 2)
+        let left = try FileManager.default.contentsOfDirectory(atPath: project.capturesFolder.path)
+            .filter { $0.hasSuffix(".png") }
+        #expect(left == ["kept.png"])
+        #expect(project.manifest.citations.map(\.id) == [kept.id])
+        #expect(project.unusedCaptureFiles.isEmpty)
+    }
+
+    @Test("Removing one citation trashes its capture, but not one still cited")
+    func removeOne() throws {
+        let projectURL = try Self.scratchProject()
+        defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+        let project = try Project.open(projectURL)
+        let comic = ComicRef(title: "B", path: "/x/b.cbz", filename: "b.cbz", fileSize: 1)
+        project.manifest.comics = [comic]
+        for name in ["a.png", "b.png"] {
+            try Data(repeating: 1, count: 16).write(to: project.capturesFolder.appendingPathComponent(name))
+        }
+        let a = Citation(comicID: comic.id, pageIndex: 0, pageNumbers: [1], captureFile: "a.png", text: "a")
+        let b = Citation(comicID: comic.id, pageIndex: 1, pageNumbers: [2], captureFile: "b.png", text: "b")
+        project.manifest.citations = [a, b]
+        project.script = "Kept [b](panels://cite/\(b.id))."
+
+        project.removeCitation(id: a.id)
+        let left = try FileManager.default.contentsOfDirectory(atPath: project.capturesFolder.path)
+            .filter { $0.hasSuffix(".png") }
+        #expect(left == ["b.png"])
+    }
+
     @Test("A comic that isn't on this Mac is reported, and found again beside the project")
     func missingComic() throws {
         let projectURL = try Self.scratchProject()
