@@ -55,12 +55,12 @@ struct ReaderView: View {
         .onKeyPress(.home) { reading { model.goToStart() } }
         .onKeyPress(.end) { reading { model.goToEnd() } }
         .onKeyPress(KeyEquivalent("c")) {
-            guard !showsControls, !model.isScriptEditing else { return .ignored }
+            guard !showsControls, !textHasKeyboard else { return .ignored }
             model.toggleCapture()
             return .handled
         }
         .onKeyPress(.escape) {
-            guard !model.isScriptEditing else { return .ignored }
+            guard !textHasKeyboard else { return .ignored }
             // The browser, then choosing a page, capture mode, a search, the panel.
             if model.showsProjects, model.hasComic || model.project != nil {
                 withAnimation(.easeOut(duration: 0.2)) { model.showsProjects = false }
@@ -112,7 +112,7 @@ struct ReaderView: View {
         .onKeyPress(keys: [.space], phases: .down) { press in
             // Space pages forward through the book; shift-space steps back —
             // unless the writer is typing, when a space is a space.
-            guard !model.isScriptEditing else { return .ignored }
+            guard !textHasKeyboard else { return .ignored }
             press.modifiers.contains(.shift) ? model.goBack() : model.goForward()
             return .handled
         }
@@ -296,9 +296,16 @@ struct ReaderView: View {
         .animation(.easeOut(duration: 0.2), value: model.lastCaptureMessage)
     }
 
-    /// A reader key: handled unless the script pane has the keyboard.
+    /// Whether some text field has the keyboard — the script, the search
+    /// field, a project's name. The reader's keys then keep out of the way:
+    /// a space in a name is a space.
+    private var textHasKeyboard: Bool {
+        model.isScriptEditing || NSApp.keyWindow?.firstResponder is NSText
+    }
+
+    /// A reader key: handled unless a text field has the keyboard.
     private func reading(_ action: () -> Void) -> KeyPress.Result {
-        guard !model.isScriptEditing else { return .ignored }
+        guard !textHasKeyboard else { return .ignored }
         action()
         return .handled
     }
