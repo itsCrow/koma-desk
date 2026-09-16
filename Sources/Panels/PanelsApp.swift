@@ -48,16 +48,16 @@ struct PanelsApp: App {
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     .disabled(!model.hasComic)
                 Divider()
-                Button("Start Page Range Here") { model.startPageRange() }
-                    .keyboardShortcut("r", modifiers: [.command, .option])
-                    .disabled(!model.hasComic || model.project == nil)
+                Button(model.isWritingInRange ? "End Page Range" : "Start Page Range") {
+                    model.togglePageRange()
+                }
+                    .keyboardShortcut("r")
+                    .disabled(model.project == nil || (!model.hasComic && !model.isWritingInRange))
                 Button("Extend Range to This Page") { model.extendPageRange() }
-                    .keyboardShortcut("r", modifiers: [.command, .option, .shift])
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(!model.canExtendPageRange)
-                Button("End Page Range") { model.endPageRange() }
-                    .disabled(model.project == nil)
                 Button("Remove Page Range") { model.removePageRange() }
-                    .disabled(model.project == nil)
+                    .disabled(model.project == nil || !model.isWritingInRange)
                 Divider()
                 Button(model.showsScript ? "Hide Script" : "Show Script") { model.showsScript.toggle() }
                     .keyboardShortcut("s", modifiers: [.command, .option])

@@ -108,6 +108,9 @@ final class ReaderModel {
     var wantsNewProject = false
     /// The script pane has the keyboard: every reader key stands down.
     var isScriptEditing = false
+    /// The block of writing the cursor sits in, reported by the editor — what
+    /// makes one key both start a range and end it.
+    var spanAtCursor: String?
     /// Whether the script pane is shown when a project is open.
     var showsScript: Bool {
         didSet { UserDefaults.standard.set(showsScript, forKey: Self.showsScriptKey) }
@@ -819,6 +822,14 @@ final class ReaderModel {
 
     // MARK: - Page ranges
 
+    /// One key does both: start a block here, or end the one being written.
+    func togglePageRange() {
+        if spanAtCursor != nil { endPageRange() } else { startPageRange() }
+    }
+
+    /// Whether the cursor is inside a block of writing.
+    var isWritingInRange: Bool { spanAtCursor != nil }
+
     /// Starts a block of writing about the pages on screen. What's selected in
     /// the script takes the range now, and whatever is written next joins it,
     /// until the writer ends it.
@@ -837,6 +848,7 @@ final class ReaderModel {
     /// Stops the block here: what's written next belongs to no range.
     func endPageRange() {
         project?.pendingSpanCommand = .end
+        lastCaptureMessage = "Range ended"
     }
 
     /// Takes the range off the block of writing at the cursor.

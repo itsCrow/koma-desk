@@ -429,6 +429,40 @@ struct ReaderProjectTests {
         #expect(project.pendingSpanCommand == .remove)
     }
 
+    @Test("One key starts a range and ends it, following where the cursor is")
+    func oneKeyToggles() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "The eclipse begins.", in: scratch)
+        let model = scratch.model
+        model.spanAtCursor = nil
+
+        // Outside a block, the key starts one — here from a range made by hand,
+        // since this test has no comic open.
+        let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|1", firstPageIndex: 11,
+                            pageNumbers: [12, 17], text: "Berserk, Vol. 1, pp. 12–17")
+        project.manifest.store(span)
+        #expect(!model.isWritingInRange)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        coordinator.applySpan(.start(span))
+
+        // The editor reports the cursor is now inside a block, so the same key
+        // means "end" from here on.
+        #expect(model.spanAtCursor == "k7m2pq")
+        #expect(model.isWritingInRange)
+        model.togglePageRange()
+        #expect(project.pendingSpanCommand == .end)
+        coordinator.applySpan(.end)
+        #expect(!model.isWritingInRange)
+
+        // And back out, the key starts again rather than ending nothing.
+        project.pendingSpanCommand = nil
+        model.togglePageRange()
+        // No comic is open in this test, so starting can't pick pages — the
+        // point is that it tried to start rather than end.
+        #expect(project.pendingSpanCommand != .end)
+    }
+
     @Test("A range reaches the script, the shot list and a paste")
     func rangesInTheScript() throws {
         let scratch = try Scratch()
@@ -470,7 +504,11 @@ struct ReaderProjectTests {
     /// destroyed, so it is tested here rather than only through the model.
     @MainActor
     private func editor(script: String, in scratch: Scratch) throws -> (ScriptEditorView.Coordinator, ScriptTextView, Project) {
-        let project = try scratch.project(named: "Editing", series: "Berserk")
+        // Opened through the model, so the reader and the editor are working on
+        // the same project — the toggle asks the model for it.
+        let url = try scratch.projects.create(named: "Editing", series: "Berserk")
+        scratch.model.openProject(at: url)
+        let project = try #require(scratch.model.project)
         project.script = script
         let coordinator = ScriptEditorView.Coordinator(project: project, model: scratch.model)
         let textView = ScriptTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 600))

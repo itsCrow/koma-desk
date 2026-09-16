@@ -411,8 +411,10 @@ struct ScriptEditorView: NSViewRepresentable {
                 // as the writer keeps writing.
                 textView.typingAttributes[ScriptStyle.spanKey] = span.id
                 textView.window?.makeFirstResponder(textView)
+                publishSpanAtCursor()
             case .end:
                 textView.typingAttributes.removeValue(forKey: ScriptStyle.spanKey)
+                publishSpanAtCursor()
             case .remove:
                 let location = textView.selectedRange().location
                 let probe = min(location, max(storage.length - 1, 0))
@@ -425,7 +427,20 @@ struct ScriptEditorView: NSViewRepresentable {
                 storage.removeAttribute(ScriptStyle.spanKey, range: run.range)
                 textView.didChangeText()
                 textView.typingAttributes.removeValue(forKey: ScriptStyle.spanKey)
+                publishSpanAtCursor()
             }
+        }
+
+        /// Tells the reader which block of writing the cursor sits in, so one
+        /// command can start a range or end it. Guarded, because this fires on
+        /// every arrow key and an @Observable write would redraw the world.
+        func publishSpanAtCursor() {
+            let id = textView?.typingAttributes[ScriptStyle.spanKey] as? String
+            if model.spanAtCursor != id { model.spanAtCursor = id }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            publishSpanAtCursor()
         }
 
         func goToSpan(_ id: String) {
