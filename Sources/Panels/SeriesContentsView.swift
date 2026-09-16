@@ -117,3 +117,46 @@ private struct ContentsRow: View {
         .onHover { hovered = $0 }
     }
 }
+
+// MARK: - The tab that brings it back
+
+/// Fills the very corner of the page area, its outer edge cut away on the
+/// diagonal so it reads as something tucked behind the page rather than a
+/// button sitting on top of it.
+struct CornerTabShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// With the contents hidden there is nothing on screen saying they exist, and
+/// ⌥⌘C is not discoverable. This is the way back.
+struct ContentsTab: View {
+    let show: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: show) {
+            ZStack(alignment: .topLeading) {
+                CornerTabShape()
+                    .fill(Color(white: hovered ? 0.22 : 0.14))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(hovered ? 1 : 0.7))
+                    .padding(.leading, 10)
+                    .padding(.top, 10)
+            }
+            .frame(width: 54, height: 54)
+            // Only the triangle takes the click; the page keeps the rest.
+            .contentShape(CornerTabShape())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("Show the contents (⌥⌘C)")
+    }
+}

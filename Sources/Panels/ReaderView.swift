@@ -204,6 +204,12 @@ struct ReaderView: View {
                     .tint(.white)
             }
 
+            if model.hasComic, model.hasContents, !model.showsContents {
+                ContentsTab { withAnimation(.easeOut(duration: 0.2)) { model.showsContents = true } }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .transition(.opacity)
+            }
+
             overlays
         }
         .background(WindowConfigurator(
