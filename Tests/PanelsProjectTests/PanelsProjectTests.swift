@@ -433,6 +433,44 @@ struct ProjectStoreTests {
         #expect(PortableName.sanitised("///", replacingIllegalWith: "", fallback: "Capture") == "Capture")
     }
 
+    @Test("Long labels are split, so the pages never get truncated away")
+    func referenceLabels() {
+        var manifest = ProjectManifest(name: "T", series: "Dragon Ball + Super")
+        manifest.register(ItemRef(itemID: "ch28|1", filename: "Chapter 028.cbr", fileSize: 1,
+                                  series: "Dragon Ball + Super", chapter: 28, title: "Ch. 28 · Training Begins!!"))
+        manifest.register(ItemRef(itemID: "v01|1", filename: "Berserk v01.cbz", fileSize: 1,
+                                  series: "Berserk", volume: 1, title: "Vol. 1"))
+
+        let citation = Citation(itemID: "ch28|1", pageIndex: 13, pageNumbers: [14], panel: 5,
+                                text: "Dragon Ball + Super, Ch. 28, p. 14, panel 5")
+        let label = manifest.label(for: citation)
+        #expect(label.pages == "p. 14, panel 5")
+        #expect(label.item == "Ch. 28")
+        #expect(label.series == "Dragon Ball + Super")
+        // In the app the series is a given, so it comes off the front.
+        #expect(label.short == "Ch. 28 · p. 14, panel 5")
+        #expect(label.detail == "Ch. 28 · Dragon Ball + Super")
+        // The whole thing survives for the clipboard and the export.
+        #expect(label.full == citation.text)
+
+        let span = PageSpan(itemID: "ch28|1", firstPageIndex: 11, pageNumbers: [12, 17],
+                            text: "Dragon Ball + Super, Ch. 28, pp. 12–17")
+        #expect(manifest.label(for: span).short == "Ch. 28 · pp. 12–17")
+
+        // A volume reads as a volume.
+        let volumeSpan = PageSpan(itemID: "v01|1", firstPageIndex: 0, pageNumbers: [3, 9], text: "x")
+        #expect(manifest.label(for: volumeSpan).short == "Vol. 1 · pp. 3–9")
+
+        // An item the project has never registered still shows its pages.
+        let orphan = Citation(itemID: "gone|1", pageIndex: 0, pageNumbers: [1, 2], text: "Somewhere, pp. 1–2")
+        #expect(manifest.label(for: orphan).item == nil)
+        #expect(manifest.label(for: orphan).short == "pp. 1–2")
+
+        // And a citation with no pages at all falls back to what it has.
+        let empty = Citation(itemID: "gone|1", pageIndex: 0, pageNumbers: [], text: "Somewhere")
+        #expect(manifest.label(for: empty).short == "Somewhere")
+    }
+
     @Test("IDs are short, URL-safe and distinct")
     func ids() {
         let ids = (0..<200).map { _ in ProjectManifest.makeID() }

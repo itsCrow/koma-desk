@@ -117,7 +117,7 @@ struct ShotListView: View {
                 ForEach(Array(shots.enumerated()), id: \.element.id) { index, citation in
                     ShotRow(
                         number: index + 1,
-                        citation: citation,
+                        label: project.manifest.label(for: citation),
                         context: project.context(of: citation.id),
                         image: project.captureURL(for: citation)
                     ) {
@@ -150,7 +150,7 @@ struct ShotListView: View {
                     .padding(.bottom, 6)
                     ForEach(unused, id: \.id) { citation in
                         HStack(spacing: 10) {
-                            Text(citation.text)
+                            Text(project.manifest.label(for: citation).short)
                                 .font(.system(size: 12))
                                 .foregroundStyle(.white.opacity(0.55))
                                 .lineLimit(1)
@@ -172,7 +172,7 @@ struct ShotListView: View {
 
 private struct ShotRow: View {
     let number: Int
-    let citation: Citation
+    let label: ReferenceLabel
     let context: String?
     let image: URL?
     let action: () -> Void
@@ -206,10 +206,12 @@ private struct ShotRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(citation.text)
+                    // The series is the project's, so saying it on every row
+                    // only pushes the pages off the end.
+                    Text(label.short)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white)
-                        .lineLimit(2)
+                        .lineLimit(1)
                         .multilineTextAlignment(.leading)
                     if let context, !context.isEmpty {
                         Text(context)

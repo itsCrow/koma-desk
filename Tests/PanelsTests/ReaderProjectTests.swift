@@ -405,6 +405,10 @@ struct ReaderProjectTests {
 
         let span = try #require(project.manifest.spans.first)
         #expect(span.itemID == item.id)
+        // The comic is on record, so the range reads as its volume or chapter
+        // and not just its pages.
+        #expect(project.manifest.items.map(\.itemID) == [item.id])
+        #expect(project.manifest.label(for: span).item != nil)
         #expect(span.firstPage == opened.first)
         #expect(span.lastPage == opened.last)
         #expect(span.text.hasPrefix(item.series))

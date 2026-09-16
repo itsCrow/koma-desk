@@ -840,9 +840,12 @@ final class ReaderModel {
         else { return }
         let span = PageSpan(itemID: item.id, firstPageIndex: pageIndex, pageNumbers: [first, pages.last ?? first],
                             text: ComicIdentity(fileURL: source).citation(pages: pages))
+        // On record like a citation's comic, so the range can be named by its
+        // chapter rather than only by its pages.
+        project.register(ItemRef(item))
         project.manifest.store(span)
         project.pendingSpanCommand = .start(span)
-        lastCaptureMessage = "Writing about \(span.text)"
+        lastCaptureMessage = "Writing about \(project.manifest.label(for: span).short)"
     }
 
     /// Stops the block here: what's written next belongs to no range.
@@ -870,7 +873,7 @@ final class ReaderModel {
         span.pageNumbers = [first, last]
         span.text = ComicIdentity(fileURL: source).citation(pages: [first, last])
         project.manifest.store(span)
-        lastCaptureMessage = "Now \(span.text)"
+        lastCaptureMessage = "Now \(project.manifest.label(for: span).short)"
     }
 
     var canExtendPageRange: Bool {

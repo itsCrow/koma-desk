@@ -93,6 +93,55 @@ public struct PageSpan: Codable, Equatable, Sendable, Identifiable {
     public var lastPage: Int { pageNumbers.last ?? firstPage }
 }
 
+/// A citation or a page range, split into its parts.
+///
+/// Stored labels read "Dragon Ball + Super, Ch. 28, pp. 12–17, panel 5",
+/// which is right on the clipboard and in an export, where nothing else says
+/// what the comic is. In the app it's mostly redundant — a project is about
+/// one series — and long enough to truncate, which loses the pages, the one
+/// part that matters. So the parts are kept separate and each view shows what
+/// it has room for.
+public struct ReferenceLabel: Equatable, Sendable {
+    /// "pp. 12–17", "p. 117, panel 3".
+    public var pages: String
+    /// "Ch. 28", "Vol. 1" — nil when the item says neither.
+    public var item: String?
+    public var series: String
+    /// The whole thing, for the clipboard and for exports.
+    public var full: String
+
+    public init(pages: String, item: String?, series: String, full: String) {
+        self.pages = pages
+        self.item = item
+        self.series = series
+        self.full = full
+    }
+
+    /// One line, with the series left off: "Ch. 28 · pp. 12–17".
+    public var short: String {
+        guard !pages.isEmpty else { return full }
+        return [item, pages].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// What the pages belong to: "Ch. 28 · Dragon Ball + Super".
+    public var detail: String {
+        [item, series.isEmpty ? nil : series].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// "p. 14", "pp. 12–17", with a panel when there is one.
+    public static func pagePhrase(_ pages: [Int], panel: Int? = nil) -> String {
+        let sorted = Array(Set(pages)).sorted()
+        var phrase = ""
+        if let first = sorted.first, let last = sorted.last {
+            phrase = first == last ? "p. \(first)" : "pp. \(first)–\(last)"
+        }
+        if let panel {
+            phrase += phrase.isEmpty ? "panel \(panel)" : ", panel \(panel)"
+        }
+        return phrase
+    }
+}
+
 /// Everything about a project except the script itself. A project is about
 /// one series; reading positions belong to the library, not to it.
 public struct ProjectManifest: Codable, Equatable, Sendable {
@@ -161,6 +210,24 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
         } else {
             spans.append(span)
         }
+    }
+
+    public func label(for citation: Citation) -> ReferenceLabel {
+        ReferenceLabel(pages: ReferenceLabel.pagePhrase(citation.pageNumbers, panel: citation.panel),
+                       item: itemLabel(citation.itemID), series: series, full: citation.text)
+    }
+
+    public func label(for span: PageSpan) -> ReferenceLabel {
+        ReferenceLabel(pages: ReferenceLabel.pagePhrase(span.pageNumbers),
+                       item: itemLabel(span.itemID), series: series, full: span.text)
+    }
+
+    /// How a volume or chapter is named on its own, without the series.
+    private func itemLabel(_ itemID: String) -> String? {
+        guard let ref = item(id: itemID) else { return nil }
+        if let chapter = ref.chapter { return "Ch. \(chapter)" }
+        if let volume = ref.volume { return "Vol. \(volume)" }
+        return ref.title.isEmpty ? nil : ref.title
     }
 
     /// Adds an item the first time it's cited.

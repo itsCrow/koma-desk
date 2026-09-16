@@ -463,7 +463,8 @@ struct ScriptEditorView: NSViewRepresentable {
                 popover.behavior = .applicationDefined
                 popover.animates = false
                 popover.appearance = NSAppearance(named: .darkAqua)
-                popover.contentViewController = NSHostingController(rootView: SpanPreview(text: span.text))
+                popover.contentViewController = NSHostingController(
+                    rootView: SpanPreview(label: self.project.manifest.label(for: span)))
                 let anchor = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: 1)
                 popover.show(relativeTo: anchor, of: textView, preferredEdge: .minY)
                 self.preview = popover
@@ -515,10 +516,11 @@ struct ScriptEditorView: NSViewRepresentable {
                 popover.behavior = .applicationDefined
                 popover.animates = false
                 popover.appearance = NSAppearance(named: .darkAqua)
+                let label = self.project.citation(id: id).map { self.project.manifest.label(for: $0) }
+                    ?? ReferenceLabel(pages: "", item: nil, series: "", full: chip.citationText)
                 popover.contentViewController = NSHostingController(rootView: CitationPreview(
-                    text: chip.citationText,
-                    image: self.thumbnail(for: id),
-                    pages: self.project.citation(id: id)?.pageNumbers ?? []
+                    label: label,
+                    image: self.thumbnail(for: id)
                 ))
                 popover.show(relativeTo: rect, of: textView, preferredEdge: .maxY)
                 self.preview = popover
@@ -542,19 +544,33 @@ struct ScriptEditorView: NSViewRepresentable {
 
 /// What a block of writing is about, while the mouse is over it.
 private struct SpanPreview: View {
-    let text: String
+    let label: ReferenceLabel
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "book.pages")
-                .font(.system(size: 11, weight: .semibold))
-            Text(text)
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
+        VStack(alignment: .leading, spacing: 4) {
+            // The pages are the point, so they get the size and never wrap
+            // away; what they belong to sits under them and may wrap.
+            HStack(spacing: 6) {
+                Image(systemName: "book.pages")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(label.pages.isEmpty ? label.full : label.pages)
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .foregroundStyle(.orange)
+            if !label.detail.isEmpty {
+                Text(label.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Click the rule in the margin to open these pages")
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.4))
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .foregroundStyle(.orange)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .frame(maxWidth: 240, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
     }
 }
 
@@ -966,9 +982,8 @@ private final class CitationChipCell: NSTextAttachmentCell {
 
 /// What a chip stands for, shown beside it on hover.
 private struct CitationPreview: View {
-    let text: String
+    let label: ReferenceLabel
     let image: NSImage?
-    let pages: [Int]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -980,14 +995,22 @@ private struct CitationPreview: View {
                     .frame(maxWidth: 260, maxHeight: 220)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            Text(text)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label.pages.isEmpty ? label.full : label.pages)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                if !label.detail.isEmpty {
+                    Text(label.detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Text("Click to open the page · drag to move")
                 .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.45))
         }
         .padding(12)
-        .frame(minWidth: 180, alignment: .leading)
+        .frame(minWidth: 180, maxWidth: 280, alignment: .leading)
     }
 }
