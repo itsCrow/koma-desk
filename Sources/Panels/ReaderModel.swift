@@ -54,6 +54,8 @@ final class ReaderModel {
 
     /// The open project, if any: the script lives beside the pages.
     private(set) var project: Project?
+    /// The script pane has the keyboard: every reader key stands down.
+    var isScriptEditing = false
     /// Whether the script pane is shown when a project is open.
     var showsScript: Bool {
         didSet { UserDefaults.standard.set(showsScript, forKey: Self.showsScriptKey) }

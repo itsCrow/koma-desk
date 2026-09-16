@@ -14,8 +14,18 @@ struct ScriptEditorView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(project: project, model: model) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        let textView = scrollView.documentView as! NSTextView
+        let scrollView = NSScrollView()
+        let textView = ScriptTextView(frame: .zero)
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        scrollView.documentView = textView
+        let model = model
+        textView.onFocusChange = { editing in model.isScriptEditing = editing }
         textView.delegate = context.coordinator
         textView.isRichText = true
         textView.allowsUndo = true
@@ -243,6 +253,26 @@ struct ScriptEditorView: NSViewRepresentable {
             guard let attachment = cell.attachment as? CitationAttachment, let id = attachment.citationID else { return }
             model.jump(toCitation: id)
         }
+    }
+}
+
+// MARK: - Text view
+
+/// Says when it has the keyboard, so the reader's own keys — space to turn
+/// the page, the arrows — stay out of the way while the writer types.
+final class ScriptTextView: NSTextView {
+    var onFocusChange: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result { onFocusChange?(true) }
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result { onFocusChange?(false) }
+        return result
     }
 }
 

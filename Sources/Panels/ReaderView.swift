@@ -35,16 +35,17 @@ struct ReaderView: View {
         .focusEffectDisabled()
         .focused($focused)
         .onAppear { focused = true }
-        .onKeyPress(.leftArrow) { model.pressedLeftArrow(); return .handled }
-        .onKeyPress(.rightArrow) { model.pressedRightArrow(); return .handled }
-        .onKeyPress(.home) { model.goToStart(); return .handled }
-        .onKeyPress(.end) { model.goToEnd(); return .handled }
+        .onKeyPress(.leftArrow) { reading { model.pressedLeftArrow() } }
+        .onKeyPress(.rightArrow) { reading { model.pressedRightArrow() } }
+        .onKeyPress(.home) { reading { model.goToStart() } }
+        .onKeyPress(.end) { reading { model.goToEnd() } }
         .onKeyPress(KeyEquivalent("c")) {
-            guard !showsControls else { return .ignored }
+            guard !showsControls, !model.isScriptEditing else { return .ignored }
             model.toggleCapture()
             return .handled
         }
         .onKeyPress(.escape) {
+            guard !model.isScriptEditing else { return .ignored }
             // Choosing a page, then capture mode, then a search, then the panel.
             if model.isChoosingPageToSave {
                 model.isChoosingPageToSave = false
@@ -86,9 +87,16 @@ struct ReaderView: View {
             if !showsControls { endLinger() }
         }
         .onKeyPress(keys: [.space], phases: .down) { press in
-            // Space pages forward through the book; shift-space steps back.
+            // Space pages forward through the book; shift-space steps back —
+            // unless the writer is typing, when a space is a space.
+            guard !model.isScriptEditing else { return .ignored }
             press.modifiers.contains(.shift) ? model.goBack() : model.goForward()
             return .handled
+        }
+        .onChange(of: model.isScriptEditing) { _, editing in
+            // The reader's own focus yields to the text view and takes over
+            // again when it's done.
+            if editing { focused = false } else { focused = true }
         }
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first(where: {
@@ -247,6 +255,13 @@ struct ReaderView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.lastCaptureMessage)
+    }
+
+    /// A reader key: handled unless the script pane has the keyboard.
+    private func reading(_ action: () -> Void) -> KeyPress.Result {
+        guard !model.isScriptEditing else { return .ignored }
+        action()
+        return .handled
     }
 
     private func setControls(visible: Bool) {

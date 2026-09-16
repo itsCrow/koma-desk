@@ -74,18 +74,20 @@ struct PanelsApp: App {
                     .keyboardShortcut("f")
                     .disabled(!model.hasComic)
                 Divider()
+                // Bare keys as menu shortcuts are claimed before a text view
+                // sees them, so they're withdrawn while the writer types.
                 Button("Next Page") { model.goForward() }
-                    .keyboardShortcut(.downArrow, modifiers: [])
+                    .keyboardShortcut(model.isScriptEditing ? nil : KeyboardShortcut(.downArrow, modifiers: []))
                     .disabled(!model.canGoForward)
                 Button("Previous Page") { model.goBack() }
-                    .keyboardShortcut(.upArrow, modifiers: [])
+                    .keyboardShortcut(model.isScriptEditing ? nil : KeyboardShortcut(.upArrow, modifiers: []))
                     .disabled(!model.canGoBack)
                 Divider()
                 Button("First Page") { model.goToStart() }
-                    .keyboardShortcut(.home, modifiers: [])
+                    .keyboardShortcut(model.isScriptEditing ? nil : KeyboardShortcut(.home, modifiers: []))
                     .disabled(!model.hasComic)
                 Button("Last Page") { model.goToEnd() }
-                    .keyboardShortcut(.end, modifiers: [])
+                    .keyboardShortcut(model.isScriptEditing ? nil : KeyboardShortcut(.end, modifiers: []))
                     .disabled(!model.hasComic)
             }
 
