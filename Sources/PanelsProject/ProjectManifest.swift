@@ -1,5 +1,5 @@
 import Foundation
-import CoreGraphics
+import PanelsFormat
 
 /// A comic the project cites: one item of the library — a volume, or a
 /// chapter. Referenced by the same id the library uses (filename and size),
@@ -39,9 +39,9 @@ public struct Citation: Codable, Equatable, Sendable, Identifiable {
     public var pageNumbers: [Int]
     public var panel: Int?
     /// A drawn shape, unit coords, top-left origin.
-    public var polygon: [CGPoint]?
+    public var polygon: [PagePoint]?
     /// A dragged rectangle, unit coords, top-left origin.
-    public var region: CGRect?
+    public var region: PageRect?
     /// The saved image, relative to the project's captures folder.
     public var captureFile: String?
     /// How the citation reads: "Berserk, Vol. 1, p. 117, panel 3".
@@ -49,7 +49,7 @@ public struct Citation: Codable, Equatable, Sendable, Identifiable {
     public var date: Date
 
     public init(id: String = ProjectManifest.makeID(), itemID: String, pageIndex: Int, pageNumbers: [Int],
-                panel: Int? = nil, polygon: [CGPoint]? = nil, region: CGRect? = nil,
+                panel: Int? = nil, polygon: [PagePoint]? = nil, region: PageRect? = nil,
                 captureFile: String? = nil, text: String, date: Date = Date()) {
         self.id = id
         self.itemID = itemID
@@ -67,7 +67,8 @@ public struct Citation: Codable, Equatable, Sendable, Identifiable {
 /// Everything about a project except the script itself. A project is about
 /// one series; reading positions belong to the library, not to it.
 public struct ProjectManifest: Codable, Equatable, Sendable {
-    public static let currentVersion = 2
+    /// 3 since citation geometry gained named keys — see `PagePoint`.
+    public static let currentVersion = 3
 
     public var version: Int
     public var name: String

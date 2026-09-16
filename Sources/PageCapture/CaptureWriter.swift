@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import PanelsFormat
 
 /// Writes captures to the editor's folder: a PNG carrying its citation, and a
 /// line in the manifest.
@@ -119,13 +120,9 @@ public struct CaptureWriter: Sendable {
         case .shape: parts.append("shape")
         case .page: parts.append("page")
         }
-        return sanitised(parts.joined(separator: " ")) + ".png"
-    }
-
-    private static func sanitised(_ name: String) -> String {
-        let illegal = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.newlines)
-        return name.components(separatedBy: illegal).joined(separator: "-")
-            .trimmingCharacters(in: .whitespaces)
+        // These land in the editor's Downloads folder, which is as likely to be
+        // Windows as not.
+        return PortableName.sanitised(parts.joined(separator: " "), fallback: "Capture") + ".png"
     }
 
     private func availableURL(for filename: String) -> URL {

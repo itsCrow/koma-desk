@@ -1,5 +1,6 @@
 import Foundation
 import Vision
+import PanelsFormat
 
 /// Reads the lettering off a page with the system's on-device OCR.
 public enum PageTextRecognizer {
@@ -17,7 +18,7 @@ public enum PageTextRecognizer {
             guard let best = observation.topCandidates(1).first else { return nil }
             let text = best.string.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
-            return TextLine(text: text, box: observation.boundingBox)
+            return TextLine(text: text, box: PageRect(observation.boundingBox))
         }
         return PageText(lines: lines)
     }

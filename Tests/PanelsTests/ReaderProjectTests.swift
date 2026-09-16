@@ -4,6 +4,7 @@ import CoreGraphics
 @testable import Panels
 import ComicArchive
 import ComicLibrary
+import PanelsFormat
 import PanelsProject
 import PageCapture
 
@@ -481,7 +482,7 @@ struct ReaderProjectTests {
         #expect(await Self.wait(seconds: 20) { project.manifest.citations.count == 1 })
 
         let citation = project.manifest.citations[0]
-        #expect(citation.polygon == triangle)
+        #expect(citation.polygon == triangle.pagePoints)
         #expect(citation.pageIndex == 10)
         #expect(citation.itemID == model.item?.id)
         let file = try #require(citation.captureFile)

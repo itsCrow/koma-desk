@@ -1,13 +1,16 @@
 import Foundation
+import PanelsFormat
 
 /// One line of lettering read off a page.
 public struct TextLine: Codable, Sendable, Equatable {
     public let text: String
     /// Where on the page, as Vision reports it: a unit rect with its origin at
-    /// the bottom-left of the image.
-    public let box: CGRect
+    /// the **bottom-left** of the image, unlike everything else here. Stored
+    /// that way, so any other text recogniser has to match the convention or
+    /// every saved index shifts.
+    public let box: PageRect
 
-    public init(text: String, box: CGRect) {
+    public init(text: String, box: PageRect) {
         self.text = text
         self.box = box
     }

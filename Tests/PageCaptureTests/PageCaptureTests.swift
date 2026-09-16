@@ -3,6 +3,7 @@ import Foundation
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
+import PanelsFormat
 @testable import PageCapture
 import ComicArchive
 
@@ -237,6 +238,11 @@ struct WriterTests {
         let odd = CaptureRecord(kind: .page, series: "What: Is/This?", volume: nil, chapter: nil, pages: [1],
                                 panel: nil, region: nil, citation: "", source: "", file: "")
         #expect(CaptureWriter.filename(for: odd) == "What- Is-This- p1 page.png")
+        // A series whose name is an MS-DOS device would make a file Windows
+        // cannot create, and the editor's unzip would fail saying nothing useful.
+        let reserved = CaptureRecord(kind: .page, series: "AUX", volume: nil, chapter: nil, pages: [1],
+                                     panel: nil, region: nil, citation: "", source: "", file: "")
+        #expect(CaptureWriter.filename(for: reserved) == "AUX p1 page.png")
         let shape = CaptureRecord(kind: .shape, series: "Berserk", volume: 1, chapter: nil, pages: [117],
                                   panel: nil, region: .zero, polygon: [.zero], citation: "", source: "", file: "")
         #expect(CaptureWriter.filename(for: shape) == "Berserk v01 p117 shape.png")
@@ -249,7 +255,7 @@ struct WriterTests {
         let writer = CaptureWriter(folder: dir.appendingPathComponent("Berserk"))
         let image = drawPage(width: 100, height: 80, panels: [])
         let record = CaptureRecord(kind: .panel, series: "Berserk", volume: 1, chapter: nil, pages: [117],
-                                   panel: 3, region: CGRect(x: 0, y: 0, width: 0.5, height: 0.5),
+                                   panel: 3, region: PageRect(x: 0, y: 0, width: 0.5, height: 0.5),
                                    citation: "Berserk, Vol. 1, p. 117, panel 3", source: "Berserk v01.cbz", file: "")
 
         let first = try writer.write(image, record: record)
@@ -284,12 +290,12 @@ struct WriterTests {
         let writer = CaptureWriter(folder: dir)
         let image = drawPage(width: 60, height: 60, panels: [])
 
-        func shape(_ points: [CGPoint]) -> CaptureRecord {
+        func shape(_ points: [PagePoint]) -> CaptureRecord {
             CaptureRecord(kind: .shape, series: "Berserk", volume: 1, chapter: nil, pages: [204],
                           panel: nil, region: .zero, polygon: points, citation: "c", source: "b.cbz", file: "")
         }
-        let one = try writer.write(image, record: shape([.zero, CGPoint(x: 1, y: 0), CGPoint(x: 0, y: 1)]))
-        let two = try writer.write(image, record: shape([.zero, CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1)]))
+        let one = try writer.write(image, record: shape([.zero, PagePoint(x: 1, y: 0), PagePoint(x: 0, y: 1)]))
+        let two = try writer.write(image, record: shape([.zero, PagePoint(x: 1, y: 0), PagePoint(x: 1, y: 1)]))
         #expect(!one.reused && !two.reused)
         #expect(one.record.file != two.record.file)
         #expect(writer.loadManifest().count == 2)

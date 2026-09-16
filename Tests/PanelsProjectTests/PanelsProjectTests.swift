@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import PanelsFormat
 @testable import PanelsProject
 
 @Suite("Script Markdown")
@@ -113,7 +114,7 @@ struct ProjectStoreTests {
         let item = ItemRef(itemID: "Berserk v01.cbz|42", filename: "Berserk v01.cbz", fileSize: 42,
                            series: "Berserk", volume: 1, title: "Vol. 1")
         let cite = Citation(itemID: item.itemID, pageIndex: 116, pageNumbers: [117], panel: 3,
-                            polygon: [CGPoint(x: 0.1, y: 0.2), CGPoint(x: 0.5, y: 0.2), CGPoint(x: 0.3, y: 0.6)],
+                            polygon: [PagePoint(x: 0.1, y: 0.2), PagePoint(x: 0.5, y: 0.2), PagePoint(x: 0.3, y: 0.6)],
                             captureFile: "Berserk v01 p117 panel3.png", text: "Berserk, Vol. 1, p. 117, panel 3")
         loaded.manifest.register(item)
         loaded.manifest.register(item)   // citing the same volume again adds nothing
@@ -183,6 +184,73 @@ struct ProjectStoreTests {
         #expect(ProjectStore.uniqueURL(named: "Eclipse", in: root).lastPathComponent == "Eclipse 2.panelsproject")
         #expect(ProjectStore.uniqueURL(named: "Ch: 1/2", in: root).lastPathComponent == "Ch 12.panelsproject")
         #expect(ProjectStore.uniqueURL(named: "   ", in: root).lastPathComponent == "Untitled.panelsproject")
+    }
+
+    @Test("Citation geometry is written with named keys, so anything can read it")
+    func geometryWireFormat() throws {
+        // The exact JSON is the contract with whatever reads a project next —
+        // a Windows build, a script, a browser. Apple used to write these as
+        // bare positional arrays ([[x,y],[w,h]]), which said nothing about
+        // which number was which. Assert the literal text, not a round-trip.
+        let cite = Citation(id: "abc123", itemID: "b.cbz|5", pageIndex: 0, pageNumbers: [1],
+                            polygon: [PagePoint(x: 0.25, y: 0.5)],
+                            region: PageRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4),
+                            text: "t", date: Date(timeIntervalSince1970: 0))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let json = String(decoding: try encoder.encode(cite), as: UTF8.self)
+
+        #expect(json.contains(#""polygon":[{"x":0.25,"y":0.5}]"#))
+        #expect(json.contains(#""region":{"height":0.4,"width":0.3,"x":0.1,"y":0.2}"#))
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        #expect(try decoder.decode(Citation.self, from: Data(json.utf8)) == cite)
+    }
+
+    @Test("A rectangle knows its edges and the box around a drawn shape")
+    func geometryHelpers() {
+        // Halves and quarters throughout, so these compare exactly as binary
+        // floating point and the test isn't about arithmetic precision.
+        let rect = PageRect(x: 0.25, y: 0.5, width: 0.5, height: 0.25)
+        #expect(rect.minX == 0.25 && rect.maxX == 0.75)
+        #expect(rect.minY == 0.5 && rect.maxY == 0.75)
+        #expect(rect.midX == 0.5 && rect.midY == 0.625)
+        #expect(rect.corners == [PagePoint(x: 0.25, y: 0.5), PagePoint(x: 0.75, y: 0.5),
+                                 PagePoint(x: 0.75, y: 0.75), PagePoint(x: 0.25, y: 0.75)])
+        #expect(rect.contains(PagePoint(x: 0.5, y: 0.625)))
+        #expect(!rect.contains(PagePoint(x: 0.875, y: 0.625)))
+        #expect(PageRect.zero.isEmpty)
+
+        let shape = [PagePoint(x: 0.5, y: 0.25), PagePoint(x: 0.25, y: 0.75), PagePoint(x: 0.75, y: 0.5)]
+        #expect(PageRect(bounding: shape) == PageRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5))
+        #expect(PageRect(bounding: []) == nil)
+    }
+
+    @Test("Names are safe on Windows too, since these folders get shared")
+    func portableNames() {
+        // Reserved since MS-DOS; Windows refuses them whatever follows.
+        #expect(PortableName.sanitised("CON") == "CON_")
+        #expect(PortableName.sanitised("aux") == "aux_")
+        #expect(PortableName.sanitised("COM4") == "COM4_")
+        #expect(PortableName.sanitised("LPT9") == "LPT9_")
+        // Reserved-ness is decided before the first dot.
+        #expect(PortableName.sanitised("NUL.png") == "NUL.png_")
+        // ...but a longer name that merely starts with one is fine.
+        #expect(PortableName.sanitised("Conan the Barbarian") == "Conan the Barbarian")
+        #expect(PortableName.sanitised("Berserk v01 p117 page") == "Berserk v01 p117 page")
+
+        // Windows silently drops trailing dots and spaces, merging two names
+        // into one file.
+        #expect(PortableName.sanitised("Chapter 1. ") == "Chapter 1")
+        // Characters no filesystem takes, and the control characters.
+        #expect(PortableName.sanitised("What: Is/This?") == "What- Is-This-")
+        #expect(PortableName.sanitised("a\u{0007}b") == "a-b")
+        #expect(PortableName.sanitised("Ch: 1/2", replacingIllegalWith: "") == "Ch 12")
+        // Nothing left to work with.
+        #expect(PortableName.sanitised("   ") == "Untitled")
+        #expect(PortableName.sanitised("///", replacingIllegalWith: "", fallback: "Capture") == "Capture")
     }
 
     @Test("IDs are short, URL-safe and distinct")

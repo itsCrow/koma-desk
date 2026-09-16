@@ -1,4 +1,5 @@
 import Foundation
+import PanelsFormat
 
 /// Why a project on disk couldn't be read.
 public enum ProjectError: LocalizedError, Equatable {
@@ -63,9 +64,9 @@ public enum ProjectStore {
     /// "Name.panelsproject", then "Name 2.panelsproject", and so on. Characters
     /// a folder can't be called are dropped.
     public static func uniqueURL(named name: String, in root: URL) -> URL {
-        let illegal = CharacterSet(charactersIn: "/:").union(.newlines).union(.controlCharacters)
-        var stem = name.components(separatedBy: illegal).joined().trimmingCharacters(in: .whitespaces)
-        if stem.isEmpty { stem = "Untitled" }
+        // A project folder is shared, so it has to be a name Windows will take
+        // too — "Ch: 1/2" becomes "Ch 12", and "CON" becomes "CON_".
+        let stem = PortableName.sanitised(name, replacingIllegalWith: "")
         var candidate = root.appendingPathComponent(stem).appendingPathExtension(packageExtension)
         var n = 2
         while FileManager.default.fileExists(atPath: candidate.path) {

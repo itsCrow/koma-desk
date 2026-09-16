@@ -4,6 +4,7 @@ import Observation
 import UniformTypeIdentifiers
 import ComicArchive
 import ComicLibrary
+import PanelsFormat
 import PageSearch
 import PageCapture
 import PanelsProject
@@ -758,7 +759,7 @@ final class ReaderModel {
     /// Records a citation of the open item in the project and queues its
     /// chip for the script.
     private func recordCitation(pageIndex: Int, pageNumbers: [Int], panel: Int?,
-                                polygon: [CGPoint]?, region: CGRect?, captureFile: String?, text: String) {
+                                polygon: [PagePoint]?, region: PageRect?, captureFile: String?, text: String) {
         guard let project, let item else { return }
         project.register(ItemRef(item))
         let citation = Citation(itemID: item.id, pageIndex: pageIndex, pageNumbers: pageNumbers, panel: panel,
@@ -789,16 +790,16 @@ final class ReaderModel {
         goTo(spread: spread)
         guard pages.indices.contains(citation.pageIndex) else { return }
         let page = pages[citation.pageIndex]
-        let outline: [CGPoint]
+        let outline: [PagePoint]
         if let polygon = citation.polygon {
             outline = polygon
         } else if let region = citation.region {
-            outline = [CGPoint(x: region.minX, y: region.minY), CGPoint(x: region.maxX, y: region.minY),
-                       CGPoint(x: region.maxX, y: region.maxY), CGPoint(x: region.minX, y: region.maxY)]
+            outline = region.corners
         } else {
-            outline = [CGPoint(x: 0.01, y: 0.01), CGPoint(x: 0.99, y: 0.01), CGPoint(x: 0.99, y: 0.99), CGPoint(x: 0.01, y: 0.99)]
+            // No shape recorded: ring the whole page.
+            outline = PageRect(x: 0.01, y: 0.01, width: 0.98, height: 0.98).corners
         }
-        focusOutlines = [page: [outline]]
+        focusOutlines = [page: [outline.cgPoints]]
         focusTask?.cancel()
         focusTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))
@@ -855,18 +856,18 @@ final class ReaderModel {
         let citation = identity.citation(pages: [pageNumber], panel: panel)
 
         let kind: CaptureRecord.Kind
-        var region: CGRect?
-        var polygon: [CGPoint]?
+        var region: PageRect?
+        var polygon: [PagePoint]?
         switch shape {
         case .page:
             kind = .page
         case .rect(let rect):
             kind = panel == nil ? .region : .panel
-            region = rect
+            region = PageRect(rect)
         case .polygon(let points):
             kind = panel == nil ? .shape : .panel
-            polygon = points
-            region = points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
+            polygon = points.pagePoints
+            region = PageRect(bounding: points.pagePoints)
         }
         let record = CaptureRecord(
             kind: kind, series: identity.series, volume: identity.volume, chapter: identity.chapter,
@@ -988,7 +989,7 @@ final class ReaderModel {
     var highlightsByPage: [URL: [CGRect]] {
         var result: [URL: [CGRect]] = [:]
         for hit in searchHits where pages.indices.contains(hit.page) {
-            result[pages[hit.page], default: []].append(hit.line.box)
+            result[pages[hit.page], default: []].append(hit.line.box.cgRect)
         }
         return result
     }

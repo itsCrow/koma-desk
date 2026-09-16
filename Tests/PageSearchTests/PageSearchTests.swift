@@ -1,10 +1,11 @@
 import Testing
 import Foundation
+import PanelsFormat
 @testable import PageSearch
 import ComicArchive
 
 private func line(_ text: String, y: CGFloat = 0.5) -> TextLine {
-    TextLine(text: text, box: CGRect(x: 0.1, y: y, width: 0.3, height: 0.05))
+    TextLine(text: text, box: PageRect(x: 0.1, y: y, width: 0.3, height: 0.05))
 }
 
 private func index(_ pages: [[String]?]) -> PageTextIndex {
