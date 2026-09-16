@@ -201,7 +201,8 @@ struct ReaderView: View {
                         .onTapGesture { setControls(visible: false) }
                         .transition(.opacity)
 
-                    ReaderControlsPanel(model: model, height: max(260, geometry.size.height * 0.4))
+                    ReaderControlsPanel(model: model,
+                                        height: min(max(260, geometry.size.height * 0.32), 340))
                         .padding(.horizontal, 16)
                         .padding(.bottom, 16)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
