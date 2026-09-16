@@ -25,6 +25,8 @@ struct PanelsApp: App {
                     .keyboardShortcut("o", modifiers: [.command, .option])
                 Button("Open Comic…") { model.presentOpenPanel() }
                     .keyboardShortcut("o")
+                Button("Open Folder…") { model.presentOpenFolderPanel() }
+                    .keyboardShortcut("o", modifiers: [.command, .shift, .option])
             }
 
             CommandGroup(after: .newItem) {
@@ -110,9 +112,20 @@ struct PanelsApp: App {
                 Button("Last Page") { model.goToEnd() }
                     .keyboardShortcut(model.isScriptEditing ? nil : KeyboardShortcut(.end, modifiers: []))
                     .disabled(!model.hasComic)
+                Divider()
+                Button("Next Chapter") { model.nextChapter() }
+                    .keyboardShortcut(.downArrow, modifiers: [.option])
+                    .disabled(!model.hasNextChapter)
+                Button("Previous Chapter") { model.previousChapter() }
+                    .keyboardShortcut(.upArrow, modifiers: [.option])
+                    .disabled(!model.hasPreviousChapter)
             }
 
             CommandGroup(after: .toolbar) {
+                Button(model.showsChapters ? "Hide Chapters" : "Show Chapters") { model.showsChapters.toggle() }
+                    .keyboardShortcut("c", modifiers: [.command, .option])
+                    .disabled(model.seriesRoot == nil)
+                Divider()
                 Picker("Reading Direction", selection: $model.direction) {
                     ForEach(ReadingDirection.allCases, id: \.self) { direction in
                         Text(direction.label).tag(direction)

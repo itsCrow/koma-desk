@@ -26,6 +26,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ReaderModel.supportedExtensions.contains($0.pathExtension.lowercased())
             }) {
                 ReaderModel.shared.open(comic)
+            } else if let folder = urls.first(where: {
+                $0.pathExtension.lowercased() != "panelsproject"
+                    && (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            }) {
+                ReaderModel.shared.open(folder: folder)
             }
         }
     }

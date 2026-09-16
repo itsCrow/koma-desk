@@ -128,6 +128,55 @@ struct ReaderProjectTests {
         model.closeProject()
     }
 
+    static var folderPath: String? { ProcessInfo.processInfo.environment["PANELS_TEST_FOLDER"] }
+
+    @Test("A folder reads as one series: the last page turns into the next chapter, and back")
+    func readThroughASeries() async throws {
+        guard let path = Self.folderPath else {
+            withKnownIssue("Set PANELS_TEST_FOLDER to a folder of chapters to run.") { Issue.record("skipped") }
+            return
+        }
+        let folder = URL(fileURLWithPath: path, isDirectory: true)
+        let (library, root) = try Self.scratchLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = ReaderModel(library: library)
+
+        model.open(folder: folder)
+        #expect(model.chapters.count >= 2)
+        #expect(await Self.wait { model.hasComic })
+        let firstIndex = try #require(model.currentChapterIndex)
+        let firstTitle = try #require(model.title)
+        #expect(model.seriesTitle?.isEmpty == false)
+
+        // Off the end of this chapter, into the start of the next.
+        model.goToEnd()
+        #expect(model.canGoForward)
+        model.goForward()
+        #expect(await Self.wait { model.title != firstTitle && model.hasComic })
+        #expect(model.title == model.chapters[firstIndex + 1].title)
+        #expect(model.spreadIndex == 0)
+
+        // Back off the front of it, onto the last spread of the one before.
+        model.goBack()
+        #expect(await Self.wait { model.title == firstTitle && model.hasComic })
+        #expect(model.spreadIndex == model.spreads.count - 1)
+
+        // A project made here remembers the folder as well as the chapter.
+        model.newProject(named: "Arc")
+        let project = try #require(model.project)
+        #expect(project.manifest.seriesFolder == folder.path)
+        #expect(project.manifest.comics.count == 1)
+
+        // A file from outside the series ends the series.
+        if let comic = Self.comicPath {
+            model.open(URL(fileURLWithPath: comic))
+            #expect(await Self.wait { model.title != firstTitle && model.hasComic })
+            #expect(model.seriesRoot == nil)
+            #expect(model.chapters.isEmpty)
+        }
+        model.closeProject()
+    }
+
     @Test("Citing puts a citation in the project, queues its chip, and can be jumped to")
     func citeAndJump() async throws {
         guard let path = Self.comicPath else {

@@ -14,7 +14,14 @@ struct ReaderView: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        Group {
+        HStack(spacing: 0) {
+            // The chapter list, when a series is open and it's wanted.
+            if model.seriesRoot != nil, model.chapters.count > 1, model.showsChapters {
+                ChapterSidebarView(model: model)
+                    .frame(width: 240)
+                Divider().overlay(.white.opacity(0.1))
+            }
+            Group {
             if let project = model.project, model.showsScript {
                 let editor = ScriptPaneView(model: model, project: project)
                 switch model.scriptPlacement {
@@ -42,7 +49,10 @@ struct ReaderView: View {
             } else {
                 pageArea
             }
+            }
+            .layoutPriority(1)
         }
+        .animation(.easeOut(duration: 0.2), value: model.showsChapters)
         // Height follows from the spread's shape; only the width needs a floor.
         .frame(minWidth: 640, minHeight: 300)
         .navigationTitle(model.title ?? "Panels")
@@ -126,6 +136,13 @@ struct ReaderView: View {
             if !shows { focused = true }
         }
         .dropDestination(for: URL.self) { urls, _ in
+            // A folder is a series; a file is a comic.
+            if let folder = urls.first(where: {
+                (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            }) {
+                model.open(folder: folder)
+                return true
+            }
             guard let url = urls.first(where: {
                 ReaderModel.supportedExtensions.contains($0.pathExtension.lowercased())
             }) else { return false }
@@ -165,7 +182,9 @@ struct ReaderView: View {
                 ProjectsBrowserView(model: model, isOverlay: false)
                     .padding(16)
             } else {
-                EmptyStateView(projectName: model.project?.name) { model.presentOpenPanel() }
+                EmptyStateView(projectName: model.project?.name,
+                               openAction: { model.presentOpenPanel() },
+                               openFolderAction: { model.presentOpenFolderPanel() })
             }
 
             if model.isLoading {
@@ -178,7 +197,8 @@ struct ReaderView: View {
         }
         .background(WindowConfigurator(
             spreadAspect: model.spreadAspect,
-            layoutKey: model.project != nil && model.showsScript ? "script-\(model.scriptPlacement.rawValue)" : "pages"
+            layoutKey: (model.seriesRoot != nil && model.chapters.count > 1 && model.showsChapters ? "chapters+" : "")
+                + (model.project != nil && model.showsScript ? "script-\(model.scriptPlacement.rawValue)" : "pages")
         ))
     }
 
@@ -452,6 +472,7 @@ private struct WarningBanner: View {
 private struct EmptyStateView: View {
     var projectName: String? = nil
     let openAction: () -> Void
+    let openFolderAction: () -> Void
 
     var body: some View {
         VStack(spacing: 18) {
@@ -461,13 +482,17 @@ private struct EmptyStateView: View {
             Text(projectName.map { "Open a comic to start citing in “\($0)”" } ?? "Open a comic to start reading")
                 .font(.title3)
                 .foregroundStyle(.white.opacity(0.8))
-            Text("Drag a .cbr, .cbz or .cb7 file here")
+            Text("Drag a .cbr, .cbz or .cb7 file here — or a folder of chapters")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.4))
-            Button("Open Comic…", action: openAction)
-                .controlSize(.large)
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 4)
+            HStack(spacing: 10) {
+                Button("Open Comic…", action: openAction)
+                    .buttonStyle(.borderedProminent)
+                Button("Open Folder…", action: openFolderAction)
+                    .buttonStyle(.bordered)
+            }
+            .controlSize(.large)
+            .padding(.top, 4)
         }
     }
 }

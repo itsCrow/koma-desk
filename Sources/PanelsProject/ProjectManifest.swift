@@ -72,15 +72,20 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
     public var positions: [String: Int]
     /// The comic that was open last, to reopen with the project.
     public var lastComicID: String?
+    /// The folder of chapters the script was being read from, if it was a
+    /// series rather than a single file — so reopening brings the chapter
+    /// list back.
+    public var seriesFolder: String?
 
     public init(name: String, comics: [ComicRef] = [], citations: [Citation] = [],
-                positions: [String: Int] = [:], lastComicID: String? = nil) {
+                positions: [String: Int] = [:], lastComicID: String? = nil, seriesFolder: String? = nil) {
         self.version = 1
         self.name = name
         self.comics = comics
         self.citations = citations
         self.positions = positions
         self.lastComicID = lastComicID
+        self.seriesFolder = seriesFolder
     }
 
     public func citation(id: String) -> Citation? {

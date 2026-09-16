@@ -578,3 +578,76 @@ struct IdentityTests {
         #expect(ComicIdentity(series: "Odd").citation(pages: []) == "Odd")
     }
 }
+
+// MARK: - Series folders
+
+@Suite("Scanning a series folder")
+struct ComicFolderTests {
+    static func makeTree() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-series-\(UUID().uuidString)", isDirectory: true)
+        let files = [
+            "02 Turtle School Training Arc/Chapter 024 - Training Fee.cbr",
+            "02 Turtle School Training Arc/Chapter 031 - Severe Training.cbr",
+            "02 Turtle School Training Arc/Chapter 025 - A Rival Appears!.cbr",
+            "02 Turtle School Training Arc/Chapter 025 - A Rival Appears!.cbr.jpg",    // poster sidecar
+            "02 Turtle School Training Arc/Chapter 025 - A Rival Appears!.cbr.json",   // metadata sidecar
+            "02 Turtle School Training Arc/poster_Chapter 024.jpg",
+            "04 Red Ribbon Army Arc/Chapter 069 - Bulma And Goku.cbr",
+            "10 Freeza Arc/Chapter 300 - Freeza vs. Piccolo.cbz",
+            "Extras/Volume 01.cb7",
+            "Loose Chapter.cbr",
+            "notes.txt",
+        ]
+        for file in files {
+            let url = root.appendingPathComponent(file)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url)
+        }
+        return root
+    }
+
+    @Test("Finds comics in reading order, grouped by arc, and skips sidecars")
+    func scan() throws {
+        let root = try Self.makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let chapters = ComicFolder.scan(root)
+        #expect(chapters.map(\.title) == [
+            "Chapter 024 - Training Fee",
+            "Chapter 025 - A Rival Appears!",
+            "Chapter 031 - Severe Training",
+            "Chapter 069 - Bulma And Goku",
+            "Chapter 300 - Freeza vs. Piccolo",
+            "Volume 01",
+            "Loose Chapter",
+        ])
+        #expect(chapters[0].arc == "02 Turtle School Training Arc")
+        #expect(chapters[3].arc == "04 Red Ribbon Army Arc")
+        #expect(chapters[6].arc == nil)
+
+        let groups = ComicFolder.grouped(chapters)
+        #expect(groups.map(\.arc) == ["02 Turtle School Training Arc", "04 Red Ribbon Army Arc", "10 Freeza Arc", "Extras", nil])
+        #expect(groups[0].chapters.count == 3)
+    }
+
+    @Test("An arc folder opened on its own has no arc headings")
+    func singleArc() throws {
+        let root = try Self.makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let arc = root.appendingPathComponent("02 Turtle School Training Arc")
+        let chapters = ComicFolder.scan(arc)
+        #expect(chapters.count == 3)
+        #expect(chapters.allSatisfy { $0.arc == nil })
+    }
+
+    @Test("A folder with no comics, or that doesn't exist, is empty")
+    func empty() throws {
+        let root = try Self.makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(ComicFolder.scan(root.appendingPathComponent("Extras/nothing")).isEmpty)
+        let bare = root.appendingPathComponent("Bare")
+        try FileManager.default.createDirectory(at: bare, withIntermediateDirectories: true)
+        #expect(ComicFolder.scan(bare).isEmpty)
+    }
+}

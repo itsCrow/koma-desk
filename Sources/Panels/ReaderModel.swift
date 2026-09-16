@@ -23,6 +23,11 @@ enum ScriptPlacement: String, CaseIterable {
     var isVertical: Bool { self == .top || self == .bottom }
 }
 
+/// Where to land when a chapter opens as part of reading straight through.
+enum ChapterStart {
+    case beginning, end
+}
+
 /// What a capture covers.
 enum CaptureShape {
     case page
@@ -86,6 +91,15 @@ final class ReaderModel {
     var showsShotList = false
     /// The controls panel is expanded into a grid filling the page area.
     var isOverviewExpanded = false
+
+    /// A folder of chapters being read as one series, and its chapters in
+    /// reading order. Nil when a single file is open.
+    private(set) var seriesRoot: URL?
+    private(set) var chapters: [Chapter] = []
+    /// The chapter list beside the pages.
+    var showsChapters: Bool {
+        didSet { UserDefaults.standard.set(showsChapters, forKey: Self.showsChaptersKey) }
+    }
     var scriptPlacement: ScriptPlacement {
         didSet { UserDefaults.standard.set(scriptPlacement.rawValue, forKey: Self.scriptPlacementKey) }
     }
@@ -134,10 +148,14 @@ final class ReaderModel {
     @ObservationIgnored private var detectedPanels: [URL: [DetectedPanel]] = [:]
     /// A citation to land on once the comic it's in has opened.
     @ObservationIgnored private var pendingJump: Citation?
+    /// Where to land in the chapter being opened: its start when reading
+    /// forward into it, its end when reading back into it.
+    @ObservationIgnored private var pendingStart: ChapterStart?
     @ObservationIgnored private var focusTask: Task<Void, Never>?
 
     private static let directionKey = "PanelsReadingDirection"
     private static let showsScriptKey = "PanelsShowsScript"
+    private static let showsChaptersKey = "PanelsShowsChapters"
     private static let scriptPlacementKey = "PanelsScriptPlacement"
 
     init(library: ProjectLibrary = ProjectLibrary()) {
@@ -146,6 +164,7 @@ final class ReaderModel {
         // Defaults to manga order.
         direction = stored.flatMap(ReadingDirection.init(rawValue:)) ?? .rightToLeft
         showsScript = UserDefaults.standard.object(forKey: Self.showsScriptKey) as? Bool ?? true
+        showsChapters = UserDefaults.standard.object(forKey: Self.showsChaptersKey) as? Bool ?? true
         scriptPlacement = UserDefaults.standard.string(forKey: Self.scriptPlacementKey)
             .flatMap(ScriptPlacement.init(rawValue:)) ?? .right
     }
@@ -174,6 +193,11 @@ final class ReaderModel {
 
     func open(_ url: URL) {
         guard !isLoading else { return }
+        // A file that isn't one of the series' chapters is a fresh start.
+        if seriesRoot != nil, !chapters.contains(where: { $0.url.standardizedFileURL == url.standardizedFileURL }) {
+            seriesRoot = nil
+            chapters = []
+        }
         isLoading = true
         errorMessage = nil
         warning = nil
@@ -226,10 +250,18 @@ final class ReaderModel {
         isLoading = false
 
         let restored = restoredProgress()
-        spreadIndex = min(max(restored, 0), max(spreads.count - 1, 0))
+        switch pendingStart {
+        case .beginning: spreadIndex = 0
+        case .end: spreadIndex = max(spreads.count - 1, 0)
+        case nil: spreadIndex = min(max(restored, 0), max(spreads.count - 1, 0))
+        }
+        pendingStart = nil
         prefetchNeighbours()
         NSDocumentController.shared.noteNewRecentDocumentURL(comic.source)
         startIndexing(comic)
+        if let seriesRoot {
+            UserDefaults.standard.set(comic.source.path, forKey: Self.lastChapterKey(for: seriesRoot))
+        }
 
         if let project {
             let ref = project.comicRef(for: comic.source, title: comic.title)
@@ -242,6 +274,8 @@ final class ReaderModel {
     }
 
     func closeComic() {
+        seriesRoot = nil
+        chapters = []
         isOverviewExpanded = false
         isCapturing = false
         isChoosingPageToSave = false
@@ -313,18 +347,102 @@ final class ReaderModel {
 
     // MARK: - Navigation
 
-    var canGoForward: Bool { spreadIndex + 1 < spreads.count }
-    var canGoBack: Bool { spreadIndex > 0 }
+    var canGoForward: Bool { spreadIndex + 1 < spreads.count || hasNextChapter }
+    var canGoBack: Bool { spreadIndex > 0 || hasPreviousChapter }
 
-    /// Forward always means further into the book, whichever way it reads.
+    /// Forward always means further into the book, whichever way it reads —
+    /// and past the last page of a chapter, into the next.
     func goForward() {
-        guard canGoForward else { return }
-        spreadIndex += 1
+        if spreadIndex + 1 < spreads.count {
+            spreadIndex += 1
+        } else if hasNextChapter {
+            nextChapter()
+        }
     }
 
     func goBack() {
-        guard canGoBack else { return }
-        spreadIndex -= 1
+        if spreadIndex > 0 {
+            spreadIndex -= 1
+        } else if hasPreviousChapter {
+            previousChapter(landingAtEnd: true)
+        }
+    }
+
+    // MARK: - Series
+
+    /// Opens a folder of chapters as one series and starts reading: the
+    /// chapter last read there, or the first.
+    func open(folder: URL, startingAt chapter: URL? = nil) {
+        let found = ComicFolder.scan(folder)
+        guard !found.isEmpty else {
+            errorMessage = "“\(folder.lastPathComponent)” has no comics in it."
+            return
+        }
+        seriesRoot = folder
+        chapters = found
+        showsChapters = true
+        NSDocumentController.shared.noteNewRecentDocumentURL(folder)
+        let remembered = UserDefaults.standard.string(forKey: Self.lastChapterKey(for: folder)).map { URL(fileURLWithPath: $0) }
+        let start = [chapter, remembered].compactMap { $0 }
+            .first { candidate in found.contains { $0.url.standardizedFileURL == candidate.standardizedFileURL } }
+            ?? found[0].url
+        if start.standardizedFileURL != source?.standardizedFileURL { open(start) }
+    }
+
+    func presentOpenFolderPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Folder"
+        panel.message = "Choose a folder of chapters or volumes to read as one series"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.prompt = "Open"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        open(folder: url)
+    }
+
+    /// The series' name, from its first chapter — the way a citation names it.
+    var seriesTitle: String? {
+        guard let seriesRoot else { return nil }
+        if let first = chapters.first { return ComicIdentity(fileURL: first.url).series }
+        return seriesRoot.lastPathComponent
+    }
+
+    var currentChapterIndex: Int? {
+        guard let source else { return nil }
+        return chapters.firstIndex { $0.url.standardizedFileURL == source.standardizedFileURL }
+    }
+
+    var currentChapter: Chapter? {
+        currentChapterIndex.map { chapters[$0] }
+    }
+
+    var hasNextChapter: Bool {
+        currentChapterIndex.map { $0 + 1 < chapters.count } ?? false
+    }
+
+    var hasPreviousChapter: Bool {
+        currentChapterIndex.map { $0 > 0 } ?? false
+    }
+
+    func openChapter(_ chapter: Chapter) {
+        guard chapter.url.standardizedFileURL != source?.standardizedFileURL else { return }
+        open(chapter.url)
+    }
+
+    func nextChapter() {
+        guard let index = currentChapterIndex, index + 1 < chapters.count else { return }
+        pendingStart = .beginning
+        open(chapters[index + 1].url)
+    }
+
+    func previousChapter(landingAtEnd: Bool = false) {
+        guard let index = currentChapterIndex, index > 0 else { return }
+        pendingStart = landingAtEnd ? .end : .beginning
+        open(chapters[index - 1].url)
+    }
+
+    private static func lastChapterKey(for folder: URL) -> String {
+        "PanelsSeriesLastChapter:\(folder.standardizedFileURL.path)"
     }
 
     func goToStart() { spreadIndex = 0 }
@@ -456,9 +574,15 @@ final class ReaderModel {
             library.noteOpened(url)
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             showsProjects = false
-            if let lastID = next.manifest.lastComicID, let ref = next.manifest.comic(id: lastID),
-               let comicURL = next.locate(ref), comicURL != source {
-                open(comicURL)
+            let lastComic = next.manifest.lastComicID.flatMap { next.manifest.comic(id: $0) }.flatMap { next.locate($0) }
+            if let folderPath = next.manifest.seriesFolder,
+               FileManager.default.fileExists(atPath: folderPath),
+               URL(fileURLWithPath: folderPath).standardizedFileURL != seriesRoot?.standardizedFileURL {
+                // The script was written against a series: bring its chapter
+                // list back, on the chapter it was last at.
+                open(folder: URL(fileURLWithPath: folderPath, isDirectory: true), startingAt: lastComic)
+            } else if let lastComic, lastComic != source {
+                open(lastComic)
             }
         } catch {
             errorMessage = "Couldn’t open the project. \(error.localizedDescription)"
@@ -513,6 +637,7 @@ final class ReaderModel {
         if registeringCurrentComic, let source, let title {
             let ref = project.comicRef(for: source, title: title)
             project.manifest.lastComicID = ref.id
+            project.manifest.seriesFolder = seriesRoot?.path
         }
     }
 
@@ -641,6 +766,7 @@ final class ReaderModel {
                                 polygon: [CGPoint]?, region: CGRect?, captureFile: String?, text: String) {
         guard let project, let title else { return }
         let ref = project.comicRef(for: comicURL, title: title)
+        if project.manifest.seriesFolder == nil, let seriesRoot { project.manifest.seriesFolder = seriesRoot.path }
         let citation = Citation(comicID: ref.id, pageIndex: pageIndex, pageNumbers: pageNumbers, panel: panel,
                                 polygon: polygon, region: region, captureFile: captureFile, text: text)
         project.add(citation)

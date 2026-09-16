@@ -114,6 +114,9 @@ struct ProjectsBrowserView: View {
             Button("Open Comic…") { model.presentOpenPanel() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            Button("Open Folder…") { model.presentOpenFolderPanel() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             if isOverlay {
                 Button { model.showsProjects = false } label: {
                     Image(systemName: "xmark")
