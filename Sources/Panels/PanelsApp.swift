@@ -40,6 +40,12 @@ struct PanelsApp: App {
                 Button(model.showsScript ? "Hide Script" : "Show Script") { model.showsScript.toggle() }
                     .keyboardShortcut("s", modifiers: [.command, .option])
                     .disabled(model.project == nil)
+                Picker("Script Position", selection: $model.scriptPlacement) {
+                    ForEach(ScriptPlacement.allCases, id: \.self) { placement in
+                        Text(placement.label).tag(placement)
+                    }
+                }
+                .disabled(model.project == nil)
                 Divider()
                 Button("Heading 1") { model.format(.heading(1)) }
                     .keyboardShortcut("1", modifiers: [.command, .option])
@@ -226,6 +232,7 @@ struct WindowConfigurator: NSViewRepresentable {
             window.delegate = coordinator
         }
         let previousSide = coordinator.sideInset
+        let previousChrome = coordinator.chromeInset
         measure(window, from: view, coordinator)
         coordinator.aspect = spreadAspect
 
@@ -236,6 +243,9 @@ struct WindowConfigurator: NSViewRepresentable {
         // Either way the pages keep the size they had. On the first pass the
         // saved frame may date from a session without the pane, so the pages
         // are only guaranteed the reader's own minimum width.
+        // A pane above or below shows up as chrome; the shaped height already
+        // accounts for it, so only the width needs adjusting here.
+        _ = previousChrome
         let content = window.contentRect(forFrameRect: window.frame)
         let widthDelta: CGFloat
         if layoutChanged {

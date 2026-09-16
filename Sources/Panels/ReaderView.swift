@@ -16,13 +16,28 @@ struct ReaderView: View {
     var body: some View {
         Group {
             if let project = model.project, model.showsScript {
-                HSplitView {
-                    // Extra width goes to the pages; the pane keeps its size.
-                    pageArea
-                        .frame(minWidth: 480)
-                        .layoutPriority(1)
-                    ScriptEditorView(project: project, model: model)
-                        .frame(minWidth: 360, idealWidth: 420, maxWidth: 700)
+                let editor = ScriptEditorView(project: project, model: model)
+                switch model.scriptPlacement {
+                case .right:
+                    HSplitView {
+                        pageArea.frame(minWidth: 480).layoutPriority(1)
+                        editor.frame(minWidth: 360, idealWidth: 420, maxWidth: 700)
+                    }
+                case .left:
+                    HSplitView {
+                        editor.frame(minWidth: 360, idealWidth: 420, maxWidth: 700)
+                        pageArea.frame(minWidth: 480).layoutPriority(1)
+                    }
+                case .bottom:
+                    VSplitView {
+                        pageArea.frame(minHeight: 300).layoutPriority(1)
+                        editor.frame(minHeight: 180, idealHeight: 260, maxHeight: 500)
+                    }
+                case .top:
+                    VSplitView {
+                        editor.frame(minHeight: 180, idealHeight: 260, maxHeight: 500)
+                        pageArea.frame(minHeight: 300).layoutPriority(1)
+                    }
                 }
             } else {
                 pageArea
@@ -151,7 +166,7 @@ struct ReaderView: View {
         }
         .background(WindowConfigurator(
             spreadAspect: model.spreadAspect,
-            layoutKey: model.project != nil && model.showsScript ? "script" : "pages"
+            layoutKey: model.project != nil && model.showsScript ? "script-\(model.scriptPlacement.rawValue)" : "pages"
         ))
     }
 

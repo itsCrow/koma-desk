@@ -7,6 +7,22 @@ import PageSearch
 import PageCapture
 import PanelsProject
 
+/// Which side of the pages the script pane sits on.
+enum ScriptPlacement: String, CaseIterable {
+    case right, left, bottom, top
+
+    var label: String {
+        switch self {
+        case .right: return "Right"
+        case .left: return "Left"
+        case .bottom: return "Bottom"
+        case .top: return "Top"
+        }
+    }
+
+    var isVertical: Bool { self == .top || self == .bottom }
+}
+
 /// What a capture covers.
 enum CaptureShape {
     case page
@@ -60,6 +76,9 @@ final class ReaderModel {
     var showsScript: Bool {
         didSet { UserDefaults.standard.set(showsScript, forKey: Self.showsScriptKey) }
     }
+    var scriptPlacement: ScriptPlacement {
+        didSet { UserDefaults.standard.set(scriptPlacement.rawValue, forKey: Self.scriptPlacementKey) }
+    }
     /// Shapes to outline on pages after a jump, keyed by page file. Unit
     /// coords, top-left origin. Cleared after a moment.
     private(set) var focusOutlines: [URL: [[CGPoint]]] = [:]
@@ -109,12 +128,15 @@ final class ReaderModel {
 
     private static let directionKey = "PanelsReadingDirection"
     private static let showsScriptKey = "PanelsShowsScript"
+    private static let scriptPlacementKey = "PanelsScriptPlacement"
 
     init() {
         let stored = UserDefaults.standard.string(forKey: Self.directionKey)
         // Defaults to manga order.
         direction = stored.flatMap(ReadingDirection.init(rawValue:)) ?? .rightToLeft
         showsScript = UserDefaults.standard.object(forKey: Self.showsScriptKey) as? Bool ?? true
+        scriptPlacement = UserDefaults.standard.string(forKey: Self.scriptPlacementKey)
+            .flatMap(ScriptPlacement.init(rawValue:)) ?? .right
     }
 
     var hasComic: Bool { !pages.isEmpty }
