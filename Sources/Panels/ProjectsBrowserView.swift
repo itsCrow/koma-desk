@@ -1,53 +1,42 @@
 import SwiftUI
 import PanelsProject
 
-/// Every project, grouped by series. The home screen when nothing is open,
-/// and an overlay over the reader when something is.
+/// The projects half of home: every project, grouped by series.
 struct ProjectsBrowserView: View {
     @Bindable var model: ReaderModel
-    let isOverlay: Bool
+    /// Only projects about this series, when set.
+    let seriesFilter: String?
 
     @State private var newName = ""
+    @State private var newSeries = ""
     @State private var isNaming = false
     @FocusState private var nameFocused: Bool
-    @State private var renaming: ProjectSummary?
-    @State private var renameTo = ""
 
-    private var library: ProjectLibrary { model.library }
+    private var projects: ProjectLibrary { model.projects }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            toolbar
                 .padding(.horizontal, 22)
-                .padding(.top, 20)
-                .padding(.bottom, 14)
+                .padding(.vertical, 12)
 
-            Divider().overlay(.white.opacity(0.08))
-
-            if library.summaries.isEmpty {
+            if projects.summaries.isEmpty {
                 empty
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
-                        ForEach(library.groupedBySeries, id: \.series) { group in
+                        ForEach(projects.groupedBySeries, id: \.series) { group in
                             VStack(alignment: .leading, spacing: 10) {
                                 Text(group.series)
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(.white.opacity(0.5))
                                     .textCase(.uppercase)
-                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 16, alignment: .top)],
-                                          alignment: .leading, spacing: 16) {
-                                    ForEach(group.projects) { summary in
-                                        ProjectCard(summary: summary, isOpen: summary.url == model.project?.url) {
-                                            model.switchTo(summary.url)
-                                        }
-                                        .contextMenu { contextMenu(for: summary) }
-                                    }
-                                }
+                                ProjectsGrid(model: model, projects: group.projects)
                             }
                         }
                     }
-                    .padding(22)
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 22)
                 }
             }
 
@@ -56,39 +45,33 @@ struct ProjectsBrowserView: View {
                 .padding(.horizontal, 22)
                 .padding(.vertical, 10)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .glassPanel(cornerRadius: 24)
-        .onAppear {
-            library.refresh()
-            if model.wantsNewProject { beginNaming() }
-        }
+        .onAppear { if model.wantsNewProject { beginNaming() } }
         .onChange(of: model.wantsNewProject) { _, wants in if wants { beginNaming() } }
-        .alert("Rename Project", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Name", text: $renameTo)
-            Button("Rename") {
-                if let renaming { model.renameProject(renaming.url, to: renameTo) }
-                renaming = nil
-            }
-            Button("Cancel", role: .cancel) { renaming = nil }
-        }
     }
 
-    // MARK: - Header
+    // MARK: - New project
 
-    private var header: some View {
+    private var toolbar: some View {
         HStack(spacing: 12) {
-            Text("Projects")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
+            Text("\(projects.summaries.count) project\(projects.summaries.count == 1 ? "" : "s")")
+                .font(.system(size: 13))
+                .foregroundStyle(.white.opacity(0.6))
             Spacer()
             if isNaming {
                 HStack(spacing: 8) {
+                    Picker("Series", selection: $newSeries) {
+                        ForEach(model.library.series) { series in
+                            Text(series.name).tag(series.name)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 180)
                     TextField("Project name", text: $newName)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                         .foregroundStyle(.white)
                         .focused($nameFocused)
-                        .frame(width: 220)
+                        .frame(width: 200)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .background(.white.opacity(0.12), in: Capsule())
@@ -97,7 +80,7 @@ struct ProjectsBrowserView: View {
                     Button("Create", action: create)
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
-                        .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty || newSeries.isEmpty)
                     Button("Cancel") { isNaming = false }
                         .buttonStyle(.plain)
                         .font(.system(size: 12))
@@ -109,40 +92,31 @@ struct ProjectsBrowserView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .keyboardShortcut("n")
+                .disabled(model.library.isEmpty)
+                .help(model.library.isEmpty ? "Add a series to the library first — a project is about one series" : "New project (⌘N)")
             }
-            Button("Open Comic…") { model.presentOpenPanel() }
+            Button("Open…") { model.presentOpenProjectPanel() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-            Button("Open Folder…") { model.presentOpenFolderPanel() }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            if isOverlay {
-                Button { model.showsProjects = false } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .frame(width: 26, height: 26)
-                        .background(.white.opacity(0.12), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("Close (Esc)")
-            }
+                .help("Open a project from anywhere (⌥⌘O)")
         }
     }
 
     private func beginNaming() {
-        newName = ""
-        isNaming = true
         model.wantsNewProject = false
+        guard !model.library.isEmpty else { return }
+        newName = ""
+        newSeries = seriesFilter ?? model.series?.name ?? model.project?.manifest.series ?? model.library.series[0].name
+        if model.library.series(named: newSeries) == nil { newSeries = model.library.series[0].name }
+        isNaming = true
         DispatchQueue.main.async { nameFocused = true }
     }
 
     private func create() {
         let name = newName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
+        guard !name.isEmpty, !newSeries.isEmpty else { return }
         isNaming = false
-        model.newProject(named: name)
+        model.newProject(named: name, series: newSeries)
     }
 
     // MARK: - Footer
@@ -151,19 +125,17 @@ struct ProjectsBrowserView: View {
         HStack(spacing: 8) {
             Image(systemName: "folder")
                 .foregroundStyle(.white.opacity(0.5))
-            Text(library.root.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+            Text(projects.root.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(.white.opacity(0.6))
-            Button("Change…") { library.chooseRoot() }
+            Button("Change…") { projects.chooseRoot() }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.9))
-            Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([library.root]) }
+            Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([projects.root]) }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.9))
             Spacer()
-            Text("\(library.summaries.count) project\(library.summaries.count == 1 ? "" : "s")")
-                .foregroundStyle(.white.opacity(0.5))
         }
         .font(.system(size: 12))
     }
@@ -176,13 +148,46 @@ struct ProjectsBrowserView: View {
             Text("No projects yet")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
-            Text("A project is a script with its citations and captures. Make one, then open the comic it's about.")
+            Text(model.library.isEmpty
+                 ? "A project is a script about one series, with its citations and captures. Add a series to the library first."
+                 : "A project is a script about one series, with its citations and captures. Make one here, or from a series’ page.")
                 .font(.system(size: 13))
                 .foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 380)
+                .frame(maxWidth: 400)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Grid and card
+
+/// Project cards, with their menu.
+struct ProjectsGrid: View {
+    @Bindable var model: ReaderModel
+    let projects: [ProjectSummary]
+
+    @State private var renaming: ProjectSummary?
+    @State private var renameTo = ""
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 16, alignment: .top)],
+                  alignment: .leading, spacing: 16) {
+            ForEach(projects) { summary in
+                ProjectCard(summary: summary, isOpen: summary.url == model.project?.url) {
+                    model.switchTo(summary.url)
+                }
+                .contextMenu { contextMenu(for: summary) }
+            }
+        }
+        .alert("Rename Project", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $renameTo)
+            Button("Rename") {
+                if let renaming { model.renameProject(renaming.url, to: renameTo) }
+                renaming = nil
+            }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        }
     }
 
     @ViewBuilder
@@ -195,8 +200,6 @@ struct ProjectsBrowserView: View {
         Button("Move to Trash", role: .destructive) { model.trashProject(summary.url) }
     }
 }
-
-// MARK: - Card
 
 private struct ProjectCard: View {
     let summary: ProjectSummary
@@ -230,7 +233,7 @@ private struct ProjectCard: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                Text(summary.comics.isEmpty ? "No comic yet" : summary.comics.joined(separator: ", "))
+                Text(summary.items.isEmpty ? "Nothing cited yet" : summary.items.joined(separator: ", "))
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.55))
                     .lineLimit(1)

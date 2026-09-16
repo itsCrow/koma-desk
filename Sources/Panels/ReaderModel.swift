@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import UniformTypeIdentifiers
 import ComicArchive
+import ComicLibrary
 import PageSearch
 import PageCapture
 import PanelsProject
@@ -23,8 +24,8 @@ enum ScriptPlacement: String, CaseIterable {
     var isVertical: Bool { self == .top || self == .bottom }
 }
 
-/// Where to land when a chapter opens as part of reading straight through.
-enum ChapterStart {
+/// Where to land when the next item opens as part of reading straight through.
+enum ItemStart {
     case beginning, end
 }
 
@@ -36,6 +37,11 @@ enum CaptureShape {
     case polygon([CGPoint])
 }
 
+/// The two halves of the home screen.
+enum HomeTab: String {
+    case library, projects
+}
+
 extension ReadingDirection {
     /// How the direction is named in the menu. The enum itself lives in
     /// ComicArchive, which has no business knowing about menus.
@@ -44,6 +50,14 @@ extension ReadingDirection {
         case .rightToLeft: return "Right to Left (Manga)"
         case .leftToRight: return "Left to Right"
         }
+    }
+}
+
+extension ItemRef {
+    /// How a project refers to a library item.
+    init(_ item: LibraryItem) {
+        self.init(itemID: item.id, filename: item.url.lastPathComponent, fileSize: item.fileSize,
+                  series: item.series, volume: item.volume, chapter: item.chapter, title: item.displayName)
     }
 }
 
@@ -73,13 +87,23 @@ final class ReaderModel {
     /// Two pages are up and Save Page was asked for: the reader picks one.
     var isChoosingPageToSave = false
 
+    /// The comics on this Mac, and how far each has been read.
+    let library: Library
+    /// The item being read — a volume or a chapter — and the series it's from.
+    private(set) var item: LibraryItem?
+    private(set) var series: Series?
+
     /// The open project, if any: the script lives beside the pages.
     private(set) var project: Project?
-    /// Every project there is; the browser and the switcher read it.
-    let library: ProjectLibrary
-    /// The projects browser is showing over the reader.
-    var showsProjects = false
-    /// ⌘N: the browser should offer the name field straight away.
+    /// Every project there is; the home screen and the switcher read it.
+    let projects: ProjectLibrary
+    /// The home screen — library and projects — is showing. It stands in for
+    /// the pages when nothing is open, and lies over them when something is.
+    var showsHome = false
+    var homeTab: HomeTab = .library
+    /// The series whose page the library half of home is showing, if any.
+    var browsingSeries: String?
+    /// ⌘N: the projects half should offer the name field straight away.
     var wantsNewProject = false
     /// The script pane has the keyboard: every reader key stands down.
     var isScriptEditing = false
@@ -91,14 +115,9 @@ final class ReaderModel {
     var showsShotList = false
     /// The controls panel is expanded into a grid filling the page area.
     var isOverviewExpanded = false
-
-    /// A folder of chapters being read as one series, and its chapters in
-    /// reading order. Nil when a single file is open.
-    private(set) var seriesRoot: URL?
-    private(set) var chapters: [Chapter] = []
-    /// The chapter list beside the pages.
-    var showsChapters: Bool {
-        didSet { UserDefaults.standard.set(showsChapters, forKey: Self.showsChaptersKey) }
+    /// The series' contents beside the pages.
+    var showsContents: Bool {
+        didSet { UserDefaults.standard.set(showsContents, forKey: Self.showsContentsKey) }
     }
     var scriptPlacement: ScriptPlacement {
         didSet { UserDefaults.standard.set(scriptPlacement.rawValue, forKey: Self.scriptPlacementKey) }
@@ -119,14 +138,11 @@ final class ReaderModel {
     var spreadIndex = 0 {
         didSet {
             guard spreadIndex != oldValue else { return }
-            saveProgress()
+            if let item { library.setPosition(spreadIndex, for: item) }
             prefetchNeighbours()
             // Turning the page means you're done capturing from this one.
             isCapturing = false
             isChoosingPageToSave = false
-            if let project, let source, let ref = project.manifest.comic(for: source) {
-                project.manifest.positions[ref.id] = spreadIndex
-            }
         }
     }
 
@@ -146,25 +162,26 @@ final class ReaderModel {
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private let indexStore = TextIndexStore()
     @ObservationIgnored private var detectedPanels: [URL: [DetectedPanel]] = [:]
-    /// A citation to land on once the comic it's in has opened.
+    /// A citation to land on once the item it's in has opened.
     @ObservationIgnored private var pendingJump: Citation?
-    /// Where to land in the chapter being opened: its start when reading
+    /// Where to land in the item being opened: its start when reading
     /// forward into it, its end when reading back into it.
-    @ObservationIgnored private var pendingStart: ChapterStart?
+    @ObservationIgnored private var pendingStart: ItemStart?
     @ObservationIgnored private var focusTask: Task<Void, Never>?
 
     private static let directionKey = "PanelsReadingDirection"
     private static let showsScriptKey = "PanelsShowsScript"
-    private static let showsChaptersKey = "PanelsShowsChapters"
+    private static let showsContentsKey = "PanelsShowsSeriesContents"
     private static let scriptPlacementKey = "PanelsScriptPlacement"
 
-    init(library: ProjectLibrary = ProjectLibrary()) {
+    init(library: Library = Library(), projects: ProjectLibrary = ProjectLibrary()) {
         self.library = library
+        self.projects = projects
         let stored = UserDefaults.standard.string(forKey: Self.directionKey)
         // Defaults to manga order.
         direction = stored.flatMap(ReadingDirection.init(rawValue:)) ?? .rightToLeft
         showsScript = UserDefaults.standard.object(forKey: Self.showsScriptKey) as? Bool ?? true
-        showsChapters = UserDefaults.standard.object(forKey: Self.showsChaptersKey) as? Bool ?? true
+        showsContents = UserDefaults.standard.object(forKey: Self.showsContentsKey) as? Bool ?? true
         scriptPlacement = UserDefaults.standard.string(forKey: Self.scriptPlacementKey)
             .flatMap(ScriptPlacement.init(rawValue:)) ?? .right
     }
@@ -180,27 +197,21 @@ final class ReaderModel {
         supportedExtensions.compactMap { UTType(filenameExtension: $0) }
     }
 
-    func presentOpenPanel() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = Self.supportedContentTypes
-        panel.message = "Choose a comic to read"
-        panel.prompt = "Open"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        open(url)
-    }
-
-    func open(_ url: URL) {
+    /// Starts reading an item of the library: at its remembered position, or
+    /// where reading straight through the series has asked for.
+    func open(item: LibraryItem) {
         guard !isLoading else { return }
-        // A file that isn't one of the series' chapters is a fresh start.
-        if seriesRoot != nil, !chapters.contains(where: { $0.url.standardizedFileURL == url.standardizedFileURL }) {
-            seriesRoot = nil
-            chapters = []
+        guard FileManager.default.fileExists(atPath: item.url.path) else {
+            library.rescan()
+            errorMessage = "“\(item.url.lastPathComponent)” isn’t where it was. If it moved, add its new folder to the library."
+            return
         }
+        self.item = item
+        self.series = library.series(containing: item)
         isLoading = true
         errorMessage = nil
         warning = nil
+        let url = item.url
 
         Task {
             // The page scan reads metadata for every page in the comic, so it
@@ -218,8 +229,35 @@ final class ReaderModel {
                 apply(comic, wideFlags: wideFlags, spreadAspect: aspect)
             case .failure(let error):
                 isLoading = false
+                pendingStart = nil
                 errorMessage = Self.describe(error, for: url)
             }
+        }
+    }
+
+    /// Picks a series up where it was left, or starts it.
+    func read(_ series: Series) {
+        guard let item = library.continueItem(in: series) else { return }
+        showsHome = false
+        open(item: item)
+    }
+
+    /// A file or folder from outside — Finder, a drop — joins the library
+    /// first. A file then opens; a folder shows its series on the home screen.
+    func addToLibrary(_ url: URL) {
+        library.addRoot(url)
+        let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+        if isDirectory {
+            showsHome = true
+            homeTab = .library
+            browsingSeries = library.series.first { series in
+                series.items.contains { $0.url.standardizedFileURL.path.hasPrefix(url.standardizedFileURL.path + "/") }
+            }?.name
+        } else if let item = library.series.lazy.flatMap(\.items).first(where: { $0.url.standardizedFileURL == url.standardizedFileURL }) {
+            showsHome = false
+            open(item: item)
+        } else {
+            errorMessage = "“\(url.lastPathComponent)” couldn’t be added to the library."
         }
     }
 
@@ -249,33 +287,32 @@ final class ReaderModel {
         warning = comic.warning?.message
         isLoading = false
 
-        let restored = restoredProgress()
+        let restored = item.map { library.position(for: $0) } ?? 0
         switch pendingStart {
         case .beginning: spreadIndex = 0
         case .end: spreadIndex = max(spreads.count - 1, 0)
         case nil: spreadIndex = min(max(restored, 0), max(spreads.count - 1, 0))
         }
         pendingStart = nil
+        if let item {
+            // Landing on the first spread doesn't change spreadIndex, so the
+            // position is written here as well as in its didSet.
+            library.setPosition(spreadIndex, for: item)
+            library.noteRead(item)
+        }
         prefetchNeighbours()
         NSDocumentController.shared.noteNewRecentDocumentURL(comic.source)
         startIndexing(comic)
-        if let seriesRoot {
-            UserDefaults.standard.set(comic.source.path, forKey: Self.lastChapterKey(for: seriesRoot))
-        }
 
-        if let project {
-            let ref = project.comicRef(for: comic.source, title: comic.title)
-            project.manifest.lastComicID = ref.id
-        }
-        if let jump = pendingJump, resolvedURL(forComicID: jump.comicID) == comic.source {
+        if let jump = pendingJump, jump.itemID == item?.id {
             pendingJump = nil
             land(on: jump)
         }
     }
 
     func closeComic() {
-        seriesRoot = nil
-        chapters = []
+        item = nil
+        series = nil
         isOverviewExpanded = false
         isCapturing = false
         isChoosingPageToSave = false
@@ -347,102 +384,77 @@ final class ReaderModel {
 
     // MARK: - Navigation
 
-    var canGoForward: Bool { spreadIndex + 1 < spreads.count || hasNextChapter }
-    var canGoBack: Bool { spreadIndex > 0 || hasPreviousChapter }
+    var canGoForward: Bool { spreadIndex + 1 < spreads.count || hasNextItem }
+    var canGoBack: Bool { spreadIndex > 0 || hasPreviousItem }
 
     /// Forward always means further into the book, whichever way it reads —
-    /// and past the last page of a chapter, into the next.
+    /// and past the last page of a volume or chapter, into the next.
     func goForward() {
         if spreadIndex + 1 < spreads.count {
             spreadIndex += 1
-        } else if hasNextChapter {
-            nextChapter()
+        } else if hasNextItem {
+            nextItem()
         }
     }
 
     func goBack() {
         if spreadIndex > 0 {
             spreadIndex -= 1
-        } else if hasPreviousChapter {
-            previousChapter(landingAtEnd: true)
+        } else if hasPreviousItem {
+            previousItem(landingAtEnd: true)
         }
     }
 
-    // MARK: - Series
+    // MARK: - Reading through a series
 
-    /// Opens a folder of chapters as one series and starts reading: the
-    /// chapter last read there, or the first.
-    func open(folder: URL, startingAt chapter: URL? = nil) {
-        let found = ComicFolder.scan(folder)
-        guard !found.isEmpty else {
-            errorMessage = "“\(folder.lastPathComponent)” has no comics in it."
-            return
-        }
-        seriesRoot = folder
-        chapters = found
-        showsChapters = true
-        NSDocumentController.shared.noteNewRecentDocumentURL(folder)
-        let remembered = UserDefaults.standard.string(forKey: Self.lastChapterKey(for: folder)).map { URL(fileURLWithPath: $0) }
-        let start = [chapter, remembered].compactMap { $0 }
-            .first { candidate in found.contains { $0.url.standardizedFileURL == candidate.standardizedFileURL } }
-            ?? found[0].url
-        if start.standardizedFileURL != source?.standardizedFileURL { open(start) }
+    /// The series' items, in reading order; empty when nothing is open.
+    var seriesItems: [LibraryItem] { series?.items ?? [] }
+
+    /// Whether there's a list worth showing beside the pages.
+    var hasContents: Bool { seriesItems.count > 1 }
+
+    var currentItemIndex: Int? {
+        guard let item else { return nil }
+        return seriesItems.firstIndex { $0.id == item.id }
     }
 
-    func presentOpenFolderPanel() {
-        let panel = NSOpenPanel()
-        panel.title = "Open Folder"
-        panel.message = "Choose a folder of chapters or volumes to read as one series"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.prompt = "Open"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        open(folder: url)
+    var hasNextItem: Bool {
+        currentItemIndex.map { $0 + 1 < seriesItems.count } ?? false
     }
 
-    /// The series' name, from its first chapter — the way a citation names it.
-    var seriesTitle: String? {
-        guard let seriesRoot else { return nil }
-        if let first = chapters.first { return ComicIdentity(fileURL: first.url).series }
-        return seriesRoot.lastPathComponent
+    var hasPreviousItem: Bool {
+        currentItemIndex.map { $0 > 0 } ?? false
     }
 
-    var currentChapterIndex: Int? {
-        guard let source else { return nil }
-        return chapters.firstIndex { $0.url.standardizedFileURL == source.standardizedFileURL }
+    /// What the next thing along is called, for the menu: "Volume" or "Chapter".
+    var itemNoun: String {
+        if let item, item.volume != nil, item.chapter == nil { return "Volume" }
+        return "Chapter"
     }
 
-    var currentChapter: Chapter? {
-        currentChapterIndex.map { chapters[$0] }
+    func openItem(_ item: LibraryItem) {
+        guard item.id != self.item?.id else { return }
+        open(item: item)
     }
 
-    var hasNextChapter: Bool {
-        currentChapterIndex.map { $0 + 1 < chapters.count } ?? false
-    }
-
-    var hasPreviousChapter: Bool {
-        currentChapterIndex.map { $0 > 0 } ?? false
-    }
-
-    func openChapter(_ chapter: Chapter) {
-        guard chapter.url.standardizedFileURL != source?.standardizedFileURL else { return }
-        open(chapter.url)
-    }
-
-    func nextChapter() {
-        guard let index = currentChapterIndex, index + 1 < chapters.count else { return }
+    func nextItem() {
+        guard let index = currentItemIndex, index + 1 < seriesItems.count else { return }
         pendingStart = .beginning
-        open(chapters[index + 1].url)
+        open(item: seriesItems[index + 1])
     }
 
-    func previousChapter(landingAtEnd: Bool = false) {
-        guard let index = currentChapterIndex, index > 0 else { return }
+    func previousItem(landingAtEnd: Bool = false) {
+        guard let index = currentItemIndex, index > 0 else { return }
         pendingStart = landingAtEnd ? .end : .beginning
-        open(chapters[index - 1].url)
+        open(item: seriesItems[index - 1])
     }
 
-    private static func lastChapterKey(for folder: URL) -> String {
-        "PanelsSeriesLastChapter:\(folder.standardizedFileURL.path)"
+    /// Back to the series' page on the home screen.
+    func showSeriesPage() {
+        guard let series else { return }
+        browsingSeries = series.name
+        homeTab = .library
+        showsHome = true
     }
 
     func goToStart() { spreadIndex = 0 }
@@ -530,8 +542,8 @@ final class ReaderModel {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(citation, forType: .string)
-        if let source, let pageIndex = visiblePages.map({ pageIndexByURL[$0.url] ?? 0 }).min() {
-            recordCitation(comicURL: source, pageIndex: pageIndex, pageNumbers: visiblePages.map(\.number),
+        if let pageIndex = visiblePages.map({ pageIndexByURL[$0.url] ?? 0 }).min() {
+            recordCitation(pageIndex: pageIndex, pageNumbers: visiblePages.map(\.number),
                            panel: nil, polygon: nil, region: nil, captureFile: nil, text: citation)
         }
         return citation
@@ -539,50 +551,52 @@ final class ReaderModel {
 
     // MARK: - Project
 
-    /// ⌘N: bring up the browser with the name field ready.
+    /// ⌘N: bring up the projects half of home with the name field ready.
     func requestNewProject() {
         wantsNewProject = true
-        if hasComic || project != nil { showsProjects = true }
+        homeTab = .projects
+        showsHome = true
     }
 
-    /// A new project in the projects folder, opened. A comic already on
-    /// screen joins it — that's the natural start of a script about it.
-    func newProject(named name: String) {
+    /// A new project about a series, opened. Made from the series' page, or
+    /// from the projects list with a series chosen; with nothing chosen, the
+    /// series being read.
+    func newProject(named name: String, series seriesName: String? = nil) {
+        guard let seriesName = seriesName ?? series?.name ?? project?.manifest.series else {
+            errorMessage = "A project is about one series. Add its comics to the library, then make the project from the series’ page."
+            return
+        }
         do {
-            let url = try library.create(named: name)
+            let url = try projects.create(named: name, series: seriesName)
             closeProject()
-            adopt(try Project.open(url), registeringCurrentComic: true)
-            showsProjects = false
+            adopt(try Project.open(url))
+            showsHome = false
+            if series?.name != seriesName, let found = library.series(named: seriesName) {
+                read(found)
+            }
         } catch {
             errorMessage = "Couldn’t create the project. \(error.localizedDescription)"
         }
     }
 
-    /// Another project takes the place of this one. Its own last comic comes
-    /// up — unless that's the comic already on screen, in which case the
-    /// pages stay exactly where they are and only the script changes. A
-    /// project with no comics yet takes the one that's open.
+    /// Another project takes the place of this one. Its series comes up where
+    /// it was last read — unless that's the series already on screen, in
+    /// which case the pages stay exactly where they are and only the script
+    /// changes.
     func switchTo(_ url: URL) {
         if let project, project.url.standardizedFileURL == url.standardizedFileURL {
-            showsProjects = false
+            showsHome = false
             return
         }
         do {
             let next = try Project.open(url)
             closeProject()
-            adopt(next, registeringCurrentComic: next.manifest.comics.isEmpty)
-            library.noteOpened(url)
+            adopt(next)
+            projects.noteOpened(url)
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
-            showsProjects = false
-            let lastComic = next.manifest.lastComicID.flatMap { next.manifest.comic(id: $0) }.flatMap { next.locate($0) }
-            if let folderPath = next.manifest.seriesFolder,
-               FileManager.default.fileExists(atPath: folderPath),
-               URL(fileURLWithPath: folderPath).standardizedFileURL != seriesRoot?.standardizedFileURL {
-                // The script was written against a series: bring its chapter
-                // list back, on the chapter it was last at.
-                open(folder: URL(fileURLWithPath: folderPath, isDirectory: true), startingAt: lastComic)
-            } else if let lastComic, lastComic != source {
-                open(lastComic)
+            showsHome = false
+            if series?.name != next.manifest.series, let found = library.series(named: next.manifest.series) {
+                read(found)
             }
         } catch {
             errorMessage = "Couldn’t open the project. \(error.localizedDescription)"
@@ -593,10 +607,10 @@ final class ReaderModel {
         let wasOpen = project?.url.standardizedFileURL == url.standardizedFileURL
         if wasOpen { project?.saveNow() }
         do {
-            let moved = try library.rename(url, to: name)
+            let moved = try projects.rename(url, to: name)
             if wasOpen {
                 project = nil
-                adopt(try Project.open(moved), registeringCurrentComic: false)
+                adopt(try Project.open(moved))
             }
         } catch {
             errorMessage = "Couldn’t rename the project. \(error.localizedDescription)"
@@ -605,14 +619,14 @@ final class ReaderModel {
 
     func duplicateProject(_ url: URL) {
         if project?.url.standardizedFileURL == url.standardizedFileURL { project?.saveNow() }
-        do { _ = try library.duplicate(url) } catch {
+        do { _ = try projects.duplicate(url) } catch {
             errorMessage = "Couldn’t duplicate the project. \(error.localizedDescription)"
         }
     }
 
     func trashProject(_ url: URL) {
         if project?.url.standardizedFileURL == url.standardizedFileURL { closeProject() }
-        do { try library.trash(url) } catch {
+        do { try projects.trash(url) } catch {
             errorMessage = "Couldn’t move the project to the Trash. \(error.localizedDescription)"
         }
     }
@@ -632,13 +646,8 @@ final class ReaderModel {
         switchTo(url)
     }
 
-    private func adopt(_ project: Project, registeringCurrentComic: Bool) {
+    private func adopt(_ project: Project) {
         self.project = project
-        if registeringCurrentComic, let source, let title {
-            let ref = project.comicRef(for: source, title: title)
-            project.manifest.lastComicID = ref.id
-            project.manifest.seriesFolder = seriesRoot?.path
-        }
     }
 
     func closeProject() {
@@ -648,39 +657,18 @@ final class ReaderModel {
         clearFocus()
     }
 
+    /// The open project's series, when the library hasn't got it — the
+    /// editor's Mac, before they've added the folder.
+    var missingSeries: String? {
+        guard let project, library.series(named: project.manifest.series) == nil else { return nil }
+        return project.manifest.series
+    }
+
     /// A shot picked from the list: go to its page, and show where it sits
     /// in the script.
     func revealShot(_ citation: Citation) {
         project?.pendingReveal = citation.id
         jump(toCitation: citation.id)
-    }
-
-    /// Comics this project references that aren't on this Mac.
-    var missingComics: [ComicRef] { project?.missingComics ?? [] }
-
-    /// Asks for a missing comic and records where it is. The file has to be
-    /// the same one: a different release has different pages, so every
-    /// citation would land somewhere else.
-    func locateComic(_ ref: ComicRef) {
-        guard let project else { return }
-        let panel = NSOpenPanel()
-        panel.title = "Locate “\(ref.filename)”"
-        panel.message = "Find your copy of “\(ref.filename)”. It must be the same file this script was written against."
-        panel.allowedContentTypes = Self.supportedContentTypes
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let chosen = panel.url else { return }
-
-        let size = (try? chosen.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        guard chosen.lastPathComponent == ref.filename || size == ref.fileSize else {
-            errorMessage = """
-                That doesn’t look like the same comic.
-
-                The script cites “\(ref.filename)” (\(ByteCountFormatter.string(fromByteCount: Int64(ref.fileSize), countStyle: .file))),                 but “\(chosen.lastPathComponent)” is \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)).                 A different release has different pages, so the citations would point at the wrong ones.
-                """
-            return
-        }
-        project.comicRef(for: chosen, title: ref.title)
-        if !hasComic { open(chosen) }
     }
 
     /// Sends captures the script doesn't use to the Trash.
@@ -749,6 +737,12 @@ final class ReaderModel {
         NSWorkspace.shared.activateFileViewerSelecting([project.url])
     }
 
+    func revealCaptures() {
+        guard let project else { return }
+        try? FileManager.default.createDirectory(at: project.capturesFolder, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([project.capturesFolder])
+    }
+
     func copyScriptAsPlainText() {
         guard let project else { return }
         let pasteboard = NSPasteboard.general
@@ -761,13 +755,13 @@ final class ReaderModel {
         project?.pendingCommand = command
     }
 
-    /// Records a citation in the project and queues its chip for the script.
-    private func recordCitation(comicURL: URL, pageIndex: Int, pageNumbers: [Int], panel: Int?,
+    /// Records a citation of the open item in the project and queues its
+    /// chip for the script.
+    private func recordCitation(pageIndex: Int, pageNumbers: [Int], panel: Int?,
                                 polygon: [CGPoint]?, region: CGRect?, captureFile: String?, text: String) {
-        guard let project, let title else { return }
-        let ref = project.comicRef(for: comicURL, title: title)
-        if project.manifest.seriesFolder == nil, let seriesRoot { project.manifest.seriesFolder = seriesRoot.path }
-        let citation = Citation(comicID: ref.id, pageIndex: pageIndex, pageNumbers: pageNumbers, panel: panel,
+        guard let project, let item else { return }
+        project.register(ItemRef(item))
+        let citation = Citation(itemID: item.id, pageIndex: pageIndex, pageNumbers: pageNumbers, panel: panel,
                                 polygon: polygon, region: region, captureFile: captureFile, text: text)
         project.add(citation)
         project.pendingInsertion = citation
@@ -775,31 +769,19 @@ final class ReaderModel {
 
     // MARK: - Jumping to a citation
 
-    /// Where a project comic is now, asking the reader if it can't be found.
-    private func resolvedURL(forComicID id: String) -> URL? {
-        guard let project, let ref = project.manifest.comic(id: id) else { return nil }
-        return project.locate(ref)
-    }
-
     func jump(toCitation id: String) {
         guard let project, let citation = project.citation(id: id) else { return }
-        var url = resolvedURL(forComicID: citation.comicID)
-        if url == nil, let ref = project.manifest.comic(id: citation.comicID) {
-            let panel = NSOpenPanel()
-            panel.title = "Locate “\(ref.filename)”"
-            panel.message = "The comic this citation points to isn’t where it was. Find it to continue."
-            panel.allowedContentTypes = Self.supportedContentTypes
-            guard panel.runModal() == .OK, let chosen = panel.url else { return }
-            project.comicRef(for: chosen, title: ref.title)  // updates the path
-            url = chosen
-        }
-        guard let url else { return }
-        if source == url {
+        if citation.itemID == item?.id {
             land(on: citation)
-        } else {
-            pendingJump = citation
-            open(url)
+            return
         }
+        guard let target = library.item(id: citation.itemID) else {
+            let name = project.manifest.item(id: citation.itemID)?.filename ?? "the comic it cites"
+            errorMessage = "“\(name)” isn’t in your library. Add the folder it’s in, and the citation will open."
+            return
+        }
+        pendingJump = citation
+        open(item: target)
     }
 
     private func land(on citation: Citation) {
@@ -832,49 +814,16 @@ final class ReaderModel {
 
     // MARK: - Capturing for the editor
 
-    private static let capturesRootKey = "PanelsCapturesRoot"
-
-    /// Where captures go: `<root>/<Series>/`. The root is
-    /// ~/Documents/Panels Captures unless the reader chose another.
-    var capturesRoot: URL {
-        get {
-            if let path = UserDefaults.standard.string(forKey: Self.capturesRootKey) {
-                return URL(fileURLWithPath: path, isDirectory: true)
-            }
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-                ?? FileManager.default.homeDirectoryForCurrentUser
-            return documents.appendingPathComponent("Panels Captures", isDirectory: true)
-        }
-        set { UserDefaults.standard.set(newValue.path, forKey: Self.capturesRootKey) }
-    }
-
-    var capturesFolder: URL? {
-        if let project { return project.capturesFolder }
-        guard let source else { return nil }
-        return capturesRoot.appendingPathComponent(ComicIdentity(fileURL: source).series, isDirectory: true)
-    }
+    /// Captures belong to a project: they're its shots.
+    var canCapture: Bool { hasComic && project != nil }
 
     func toggleCapture() {
         guard hasComic else { return }
+        guard project != nil else {
+            lastCaptureMessage = "Captures belong to a project — make or open one first"
+            return
+        }
         isCapturing.toggle()
-    }
-
-    func chooseCapturesRoot() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.message = "Choose where captured panels are saved"
-        panel.prompt = "Use This Folder"
-        panel.directoryURL = capturesRoot
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        capturesRoot = url
-    }
-
-    func revealCapturesFolder() {
-        let folder = capturesFolder ?? capturesRoot
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
     /// Panels on a page, detected once and kept for the life of the comic.
@@ -894,9 +843,12 @@ final class ReaderModel {
     /// transparent. If the shape sits inside a detected panel, the citation
     /// names that panel.
     func capture(page pageURL: URL, shape: CaptureShape) {
-        guard let source, let folder = capturesFolder,
-              let pageIndex = pageIndexByURL[pageURL]
-        else { return }
+        guard let source, let pageIndex = pageIndexByURL[pageURL] else { return }
+        guard let project else {
+            lastCaptureMessage = "Captures belong to a project — make or open one first"
+            return
+        }
+        let folder = project.capturesFolder
         let panel = panelNumber(enclosing: shape, on: pageURL)
         let identity = ComicIdentity(fileURL: source)
         let pageNumber = pageIndex + 1
@@ -947,10 +899,8 @@ final class ReaderModel {
                 pasteboard.clearContents()
                 pasteboard.setString(citation, forType: .string)
                 let verb = written.reused ? "Already saved as" : "Saved"
-                lastCaptureMessage = project == nil
-                    ? "\(verb) \(file) · citation copied"
-                    : "\(verb) \(file) · cited in script"
-                recordCitation(comicURL: source, pageIndex: pageIndex, pageNumbers: [pageNumber], panel: panel,
+                lastCaptureMessage = "\(verb) \(file) · cited in script"
+                recordCitation(pageIndex: pageIndex, pageNumbers: [pageNumber], panel: panel,
                                polygon: polygon, region: region, captureFile: file, text: citation)
             case .failure(let error):
                 lastCaptureMessage = "Couldn’t save the capture: \(error.localizedDescription)"
@@ -962,6 +912,10 @@ final class ReaderModel {
     func savePage() {
         let pages = visiblePages
         guard !pages.isEmpty else { return }
+        guard project != nil else {
+            lastCaptureMessage = "Captures belong to a project — make or open one first"
+            return
+        }
         if pages.count == 1 {
             capture(page: pages[0].url, shape: .page)
         } else {
@@ -1094,23 +1048,5 @@ final class ReaderModel {
     private func publishHits(_ hits: [SearchHit]) {
         searchHits = hits
         hitsByPage = hits.reduce(into: [:]) { $0[$1.page, default: 0] += 1 }
-    }
-
-    // MARK: - Reading position
-
-    private func progressKey(for url: URL) -> String {
-        "PanelsProgress:\(url.standardizedFileURL.path)"
-    }
-
-    private func saveProgress() {
-        guard let source else { return }
-        UserDefaults.standard.set(spreadIndex, forKey: progressKey(for: source))
-    }
-
-    private func restoredProgress() -> Int {
-        guard let source,
-              let stored = UserDefaults.standard.object(forKey: progressKey(for: source)) as? Int
-        else { return 0 }
-        return stored
     }
 }

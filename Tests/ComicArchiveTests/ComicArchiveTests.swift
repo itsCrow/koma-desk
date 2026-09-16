@@ -406,6 +406,25 @@ struct OpenTests {
         }
     }
 
+    @Test("The first page can be read out for a cover without extracting the comic")
+    func firstPage() throws {
+        let scratch = try Self.makeScratch()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let staging = scratch.appendingPathComponent("book", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        // Written out of order so the archive's own order isn't page order.
+        for (index, width) in zip([3, 1, 2], [130, 110, 120]) {
+            try Self.writePNG(width: width, height: 200, to: staging.appendingPathComponent("\(index).png"))
+        }
+        let cbz = scratch.appendingPathComponent("Cover.cbz")
+        #expect(try Self.run("/usr/bin/zip", ["-q", "-r", cbz.path, "."], in: staging) == 0)
+
+        let data = try ComicArchive.firstPageData(of: cbz)
+        let coverFile = scratch.appendingPathComponent("cover.png")
+        try data.write(to: coverFile)
+        #expect(Self.pixelSize(of: coverFile)?.0 == 110)   // page 1, not the first entry
+    }
+
     @Test("Reopening the same file reuses the extraction cache")
     func cacheReuse() throws {
         let scratch = try Self.makeScratch()

@@ -2,7 +2,6 @@ import AppKit
 import Foundation
 import Observation
 import PanelsProject
-import ComicArchive
 import PageCapture
 
 /// The open project: the script, its citations, and where they point. Saves
@@ -38,9 +37,9 @@ final class Project {
         self.script = loaded.script
     }
 
-    static func create(at url: URL) throws -> Project {
+    static func create(at url: URL, series: String) throws -> Project {
         let name = url.deletingPathExtension().lastPathComponent
-        return Project(url: url, loaded: try ProjectStore.create(at: url, name: name))
+        return Project(url: url, loaded: try ProjectStore.create(at: url, name: name, series: series))
     }
 
     static func open(_ url: URL) throws -> Project {
@@ -64,26 +63,11 @@ final class Project {
         try? ProjectStore.save(.init(manifest: manifest, script: script), to: url)
     }
 
-    // MARK: - Comics and citations
+    // MARK: - Items and citations
 
-    /// The project's reference for a comic file, added if it's new.
-    @discardableResult
-    func comicRef(for fileURL: URL, title: String) -> ComicRef {
-        let path = fileURL.standardizedFileURL.path
-        let series = ComicIdentity(fileURL: fileURL).series
-        if var known = manifest.comic(for: fileURL) {
-            var changed = false
-            if known.path != path { known.path = path; changed = true }
-            if known.series == nil { known.series = series; changed = true }
-            if changed, let index = manifest.comics.firstIndex(where: { $0.id == known.id }) {
-                manifest.comics[index] = known
-            }
-            return known
-        }
-        let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        let ref = ComicRef(title: title, path: path, filename: fileURL.lastPathComponent, fileSize: size, series: series)
-        manifest.comics.append(ref)
-        return ref
+    /// Notes an item of the library the script cites, the first time it does.
+    func register(_ ref: ItemRef) {
+        manifest.register(ref)
     }
 
     func add(_ citation: Citation) {
@@ -92,36 +76,6 @@ final class Project {
 
     func citation(id: String) -> Citation? {
         manifest.citation(id: id)
-    }
-
-    /// Where a referenced comic is now: its recorded path, or beside the
-    /// project, or in a `comics` folder inside it.
-    func locate(_ ref: ComicRef) -> URL? {
-        let beside = url.deletingLastPathComponent()
-        let candidates = [
-            URL(fileURLWithPath: ref.path),
-            beside.appendingPathComponent(ref.filename),
-            url.appendingPathComponent("comics").appendingPathComponent(ref.filename),
-        ]
-        if let found = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
-            return found
-        }
-        // One level down from the project's own folder, which covers a shared
-        // folder holding the project and a folder of comics beside it.
-        let manager = FileManager.default
-        guard let entries = try? manager.contentsOfDirectory(at: beside, includingPropertiesForKeys: [.isDirectoryKey],
-                                                             options: [.skipsHiddenFiles])
-        else { return nil }
-        for entry in entries where (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
-            let candidate = entry.appendingPathComponent(ref.filename)
-            if manager.fileExists(atPath: candidate.path) { return candidate }
-        }
-        return nil
-    }
-
-    /// Comics this project references that aren't on this Mac.
-    var missingComics: [ComicRef] {
-        manifest.comics.filter { locate($0) == nil }
     }
 
     /// The citations in the order they appear in the script — the order the

@@ -15,37 +15,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Double-clicking a .cbr or a .panelsproject in Finder, or dropping one
-    /// on the Dock icon.
+    /// Double-clicking a .cbr, a folder or a .panelsproject in Finder, or
+    /// dropping one on the Dock icon. Comics join the library on the way in.
     func application(_ application: NSApplication, open urls: [URL]) {
         MainActor.assumeIsolated {
+            let model = ReaderModel.shared
             if let project = urls.first(where: { $0.pathExtension.lowercased() == "panelsproject" }) {
-                ReaderModel.shared.openProject(at: project)
+                model.openProject(at: project)
             }
-            if let comic = urls.first(where: {
-                ReaderModel.supportedExtensions.contains($0.pathExtension.lowercased())
-            }) {
-                ReaderModel.shared.open(comic)
-            } else if let folder = urls.first(where: {
-                $0.pathExtension.lowercased() != "panelsproject"
-                    && (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-            }) {
-                ReaderModel.shared.open(folder: folder)
+            for url in urls where url.pathExtension.lowercased() != "panelsproject" {
+                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                if isDirectory || ReaderModel.supportedExtensions.contains(url.pathExtension.lowercased()) {
+                    model.addToLibrary(url)
+                }
             }
         }
     }
 
-    /// A project dropped into the shared folder from Finder shows up when the
-    /// app comes to the front.
+    /// Files added to a watched folder, or a project dropped into the shared
+    /// folder from Finder, show up when the app comes to the front.
     func applicationDidBecomeActive(_ notification: Notification) {
         MainActor.assumeIsolated {
-            ReaderModel.shared.library.refresh()
+            ReaderModel.shared.projects.refresh()
+            ReaderModel.shared.library.rescan()
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             ReaderModel.shared.closeProject()
+            ReaderModel.shared.library.saveNow()
         }
     }
 

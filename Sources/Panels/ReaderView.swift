@@ -14,10 +14,36 @@ struct ReaderView: View {
     @FocusState private var focused: Bool
 
     var body: some View {
+        interactive
+        .dropDestination(for: URL.self) { urls, _ in dropped(urls) } isTargeted: { isDropTargeted = $0 }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.accentColor, lineWidth: 4)
+                    .padding(8)
+            }
+        }
+        .alert(
+            "Can’t open this comic",
+            isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { if !$0 { model.errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+    }
+
+    /// The contents beside the pages, then the pages with the script pane
+    /// wherever it's been put.
+    @ViewBuilder
+    private var layout: some View {
         HStack(spacing: 0) {
-            // The chapter list, when a series is open and it's wanted.
-            if model.seriesRoot != nil, model.chapters.count > 1, model.showsChapters {
-                ChapterSidebarView(model: model)
+            // The series' contents, when there's more than one thing in it.
+            if let series = model.series, model.hasContents, model.showsContents {
+                SeriesContentsView(model: model, series: series)
                     .frame(width: 240)
                 Divider().overlay(.white.opacity(0.1))
             }
@@ -52,7 +78,12 @@ struct ReaderView: View {
             }
             .layoutPriority(1)
         }
-        .animation(.easeOut(duration: 0.2), value: model.showsChapters)
+    }
+
+    /// The layout with the reader's keys and focus on it.
+    private var interactive: some View {
+        layout
+        .animation(.easeOut(duration: 0.2), value: model.showsContents)
         // Height follows from the spread's shape; only the width needs a floor.
         .frame(minWidth: 640, minHeight: 300)
         .navigationTitle(model.title ?? "Panels")
@@ -69,33 +100,7 @@ struct ReaderView: View {
             model.toggleCapture()
             return .handled
         }
-        .onKeyPress(.escape) {
-            guard !textHasKeyboard else { return .ignored }
-            // The browser, then choosing a page, capture mode, a search, the panel.
-            if model.showsProjects, model.hasComic || model.project != nil {
-                withAnimation(.easeOut(duration: 0.2)) { model.showsProjects = false }
-                return .handled
-            }
-            if model.isChoosingPageToSave {
-                model.isChoosingPageToSave = false
-                return .handled
-            }
-            if model.isOverviewExpanded {
-                withAnimation(.easeOut(duration: 0.22)) { model.isOverviewExpanded = false }
-                return .handled
-            }
-            if model.isCapturing {
-                model.isCapturing = false
-                return .handled
-            }
-            if model.isSearching {
-                model.searchQuery = ""
-                return .handled
-            }
-            guard showsControls else { return .ignored }
-            setControls(visible: false)
-            return .handled
-        }
+        .onKeyPress(.escape) { pressedEscape() }
         .onChange(of: model.wantsSearchFocus) { _, wants in
             if wants { setControls(visible: true) }
         }
@@ -135,38 +140,48 @@ struct ReaderView: View {
         .onChange(of: model.showsScript) { _, shows in
             if !shows { focused = true }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            // A folder is a series; a file is a comic.
-            if let folder = urls.first(where: {
-                (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
-            }) {
-                model.open(folder: folder)
-                return true
-            }
-            guard let url = urls.first(where: {
-                ReaderModel.supportedExtensions.contains($0.pathExtension.lowercased())
-            }) else { return false }
-            model.open(url)
-            return true
-        } isTargeted: { isDropTargeted = $0 }
-        .overlay {
-            if isDropTargeted {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.accentColor, lineWidth: 4)
-                    .padding(8)
-            }
+    }
+
+    /// Esc backs out of one thing at a time: home, then choosing a page,
+    /// capture mode, a search, the panel.
+    private func pressedEscape() -> KeyPress.Result {
+        guard !textHasKeyboard else { return .ignored }
+        // Home, then choosing a page, capture mode, a search, the panel.
+        if model.showsHome, model.hasComic {
+            withAnimation(.easeOut(duration: 0.2)) { model.showsHome = false }
+            return .handled
         }
-        .alert(
-            "Can’t open this comic",
-            isPresented: Binding(
-                get: { model.errorMessage != nil },
-                set: { if !$0 { model.errorMessage = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { model.errorMessage = nil }
-        } message: {
-            Text(model.errorMessage ?? "")
+        if model.isChoosingPageToSave {
+            model.isChoosingPageToSave = false
+            return .handled
         }
+        if model.isOverviewExpanded {
+            withAnimation(.easeOut(duration: 0.22)) { model.isOverviewExpanded = false }
+            return .handled
+        }
+        if model.isCapturing {
+            model.isCapturing = false
+            return .handled
+        }
+        if model.isSearching {
+            model.searchQuery = ""
+            return .handled
+        }
+        guard showsControls else { return .ignored }
+        setControls(visible: false)
+        return .handled
+    }
+
+    /// Folders and comics dropped on the window join the library; a comic
+    /// then opens.
+    private func dropped(_ urls: [URL]) -> Bool {
+        let accepted = urls.filter { url in
+            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            return isDirectory || ReaderModel.supportedExtensions.contains(url.pathExtension.lowercased())
+        }
+        guard !accepted.isEmpty else { return false }
+        for url in accepted { model.addToLibrary(url) }
+        return true
     }
 
     // MARK: - Pages
@@ -177,14 +192,10 @@ struct ReaderView: View {
 
             if model.hasComic {
                 spread
-            } else if model.project == nil {
-                // Nothing open at all: the projects are the front door.
-                ProjectsBrowserView(model: model, isOverlay: false)
-                    .padding(16)
             } else {
-                EmptyStateView(projectName: model.project?.name,
-                               openAction: { model.presentOpenPanel() },
-                               openFolderAction: { model.presentOpenFolderPanel() })
+                // Nothing open: the library and the projects are the front door.
+                HomeView(model: model, isOverlay: false)
+                    .padding(16)
             }
 
             if model.isLoading {
@@ -197,7 +208,7 @@ struct ReaderView: View {
         }
         .background(WindowConfigurator(
             spreadAspect: model.spreadAspect,
-            layoutKey: (model.seriesRoot != nil && model.chapters.count > 1 && model.showsChapters ? "chapters+" : "")
+            layoutKey: (model.hasContents && model.showsContents ? "contents+" : "")
                 + (model.project != nil && model.showsScript ? "script-\(model.scriptPlacement.rawValue)" : "pages")
         ))
     }
@@ -251,8 +262,8 @@ struct ReaderView: View {
                 if let warning = model.warning {
                     WarningBanner(text: warning)
                 }
-                ForEach(model.missingComics, id: \.id) { ref in
-                    MissingComicBanner(filename: ref.filename) { model.locateComic(ref) }
+                if model.hasComic, let missing = model.missingSeries {
+                    MissingSeriesBanner(series: missing) { model.library.presentAddPanel() }
                 }
                 if model.isCapturing {
                     HStack(spacing: 14) {
@@ -287,18 +298,18 @@ struct ReaderView: View {
             }
         }
         .overlay {
-            if model.showsProjects, model.hasComic || model.project != nil {
+            if model.showsHome, model.hasComic {
                 ZStack {
                     Color.black.opacity(0.45)
                         .contentShape(Rectangle())
-                        .onTapGesture { model.showsProjects = false }
-                    ProjectsBrowserView(model: model, isOverlay: true)
+                        .onTapGesture { model.showsHome = false }
+                    HomeView(model: model, isOverlay: true)
                         .padding(28)
                 }
                 .transition(.opacity)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: model.showsProjects)
+        .animation(.easeOut(duration: 0.2), value: model.showsHome)
         .animation(.easeOut(duration: 0.15), value: model.isChoosingPageToSave)
         .overlay(alignment: .bottom) {
             if let message = model.lastCaptureMessage {
@@ -430,18 +441,19 @@ private struct PageChooser: View {
     }
 }
 
-/// A comic the script cites that isn't on this Mac — said plainly, rather
-/// than found out when a citation is clicked.
-private struct MissingComicBanner: View {
-    let filename: String
-    let locate: () -> Void
+/// The project's series isn't in the library — the editor's Mac, before
+/// they've added the folder. Said plainly, rather than found out when a
+/// citation is clicked.
+private struct MissingSeriesBanner: View {
+    let series: String
+    let add: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "questionmark.folder")
-            Text("“\(filename)” isn’t on this Mac")
+            Text("This project is about \(series), which isn’t in your library")
                 .lineLimit(1)
-            Button("Locate…", action: locate)
+            Button("Add Folder…", action: add)
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .semibold))
                 .padding(.horizontal, 10)
@@ -466,33 +478,5 @@ private struct WarningBanner: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(.yellow.opacity(0.9), in: Capsule())
-    }
-}
-
-private struct EmptyStateView: View {
-    var projectName: String? = nil
-    let openAction: () -> Void
-    let openFolderAction: () -> Void
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Image(systemName: "books.vertical")
-                .font(.system(size: 52, weight: .thin))
-                .foregroundStyle(.white.opacity(0.5))
-            Text(projectName.map { "Open a comic to start citing in “\($0)”" } ?? "Open a comic to start reading")
-                .font(.title3)
-                .foregroundStyle(.white.opacity(0.8))
-            Text("Drag a .cbr, .cbz or .cb7 file here — or a folder of chapters")
-                .font(.callout)
-                .foregroundStyle(.white.opacity(0.4))
-            HStack(spacing: 10) {
-                Button("Open Comic…", action: openAction)
-                    .buttonStyle(.borderedProminent)
-                Button("Open Folder…", action: openFolderAction)
-                    .buttonStyle(.bordered)
-            }
-            .controlSize(.large)
-            .padding(.top, 4)
-        }
     }
 }

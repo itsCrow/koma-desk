@@ -1,5 +1,18 @@
 import Foundation
 
+/// Why a project on disk couldn't be read.
+public enum ProjectError: LocalizedError, Equatable {
+    /// Written by a version of the app whose projects looked different.
+    case unsupportedVersion(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedVersion(let version):
+            return "This project was made by an earlier version of Panels (format \(version)) and can’t be opened."
+        }
+    }
+}
+
 /// A project on disk: a folder holding the script, the manifest and the
 /// captures. Finder shows it as one file.
 public enum ProjectStore {
@@ -33,7 +46,17 @@ public enum ProjectStore {
 
     /// Just the manifest — enough to describe a project without its script.
     public static func loadManifest(_ url: URL) throws -> ProjectManifest {
-        try decoder.decode(ProjectManifest.self, from: Data(contentsOf: manifestURL(of: url)))
+        try decodeManifest(Data(contentsOf: manifestURL(of: url)))
+    }
+
+    /// A manifest from an earlier format is refused outright rather than
+    /// half-read: its citations point at things by names this version
+    /// doesn't know.
+    static func decodeManifest(_ data: Data) throws -> ProjectManifest {
+        struct Probe: Decodable { var version: Int }
+        let version = (try? decoder.decode(Probe.self, from: data))?.version ?? 0
+        guard version == ProjectManifest.currentVersion else { throw ProjectError.unsupportedVersion(version) }
+        return try decoder.decode(ProjectManifest.self, from: data)
     }
 
     /// A place for a new project called `name` inside `root` that isn't taken:
@@ -59,17 +82,17 @@ public enum ProjectStore {
         return [script, manifest].compactMap { $0 }.max()
     }
 
-    /// Makes a new, empty project at `url` (which should end in `.panelsproject`).
-    public static func create(at url: URL, name: String) throws -> Loaded {
+    /// Makes a new, empty project about `series` at `url` (which should end
+    /// in `.panelsproject`).
+    public static func create(at url: URL, name: String, series: String) throws -> Loaded {
         try FileManager.default.createDirectory(at: capturesFolder(of: url), withIntermediateDirectories: true)
-        let loaded = Loaded(manifest: ProjectManifest(name: name), script: "")
+        let loaded = Loaded(manifest: ProjectManifest(name: name, series: series), script: "")
         try save(loaded, to: url)
         return loaded
     }
 
     public static func load(_ url: URL) throws -> Loaded {
-        let data = try Data(contentsOf: manifestURL(of: url))
-        let manifest = try decoder.decode(ProjectManifest.self, from: data)
+        let manifest = try decodeManifest(Data(contentsOf: manifestURL(of: url)))
         let script = (try? String(contentsOf: scriptURL(of: url), encoding: .utf8)) ?? ""
         return Loaded(manifest: manifest, script: script)
     }

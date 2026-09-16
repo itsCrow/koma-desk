@@ -43,7 +43,7 @@ struct ScriptPaneView: View {
     /// The project's name, and a way to any other.
     private var projectMenu: some View {
         Menu {
-            ForEach(model.library.groupedBySeries, id: \.series) { group in
+            ForEach(model.projects.groupedBySeries, id: \.series) { group in
                 Section(group.series) {
                     ForEach(group.projects) { summary in
                         Button {
@@ -61,7 +61,7 @@ struct ScriptPaneView: View {
             }
             Divider()
             Button("New Project…") { model.requestNewProject() }
-            Button("All Projects…") { model.showsProjects = true }
+            Button("All Projects…") { model.homeTab = .projects; model.showsHome = true }
         } label: {
             HStack(spacing: 5) {
                 Text(project.name)

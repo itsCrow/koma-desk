@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import ComicArchive
 import PanelsProject
 
 /// What the browser knows about a project without opening it.
@@ -9,9 +8,10 @@ struct ProjectSummary: Identifiable, Equatable {
     var id: URL { url }
     let url: URL
     let name: String
-    /// "Berserk", "Dragon Ball + Super" — from the comics it cites.
+    /// "Berserk", "Dragon Ball + Super" — what the script is about.
     let series: String
-    let comics: [String]
+    /// The volumes or chapters cited so far.
+    let items: [String]
     let citationCount: Int
     let edited: Date?
     /// A capture to stand for the project, if it has one.
@@ -27,7 +27,6 @@ struct ProjectSummary: Identifiable, Equatable {
 final class ProjectLibrary {
     private static let rootKey = "PanelsProjectsRoot"
     private static let recentsKey = "PanelsProjectRecents"
-    nonisolated static let unsortedSeries = "Unsorted"
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var fixedRoot: URL?
@@ -89,9 +88,6 @@ final class ProjectLibrary {
 
     nonisolated static func summary(of url: URL, elsewhere: Bool) -> ProjectSummary? {
         guard let manifest = try? ProjectStore.loadManifest(url) else { return nil }
-        let series = manifest.comics.first.map { ref in
-            ref.series ?? ComicIdentity(fileURL: URL(fileURLWithPath: ref.path)).series
-        } ?? unsortedSeries
         let captures = ProjectStore.capturesFolder(of: url)
         let picture = manifest.citations.lazy
             .compactMap(\.captureFile)
@@ -100,8 +96,8 @@ final class ProjectLibrary {
         return ProjectSummary(
             url: url,
             name: url.deletingPathExtension().lastPathComponent,
-            series: series,
-            comics: manifest.comics.map(\.title),
+            series: manifest.series,
+            items: manifest.items.map(\.title),
             citationCount: manifest.citations.count,
             edited: ProjectStore.lastEdited(url),
             picture: picture,
@@ -132,10 +128,11 @@ final class ProjectLibrary {
 
     // MARK: - Changing the folder
 
-    func create(named name: String) throws -> URL {
+    /// A new, empty project about `series`.
+    func create(named name: String, series: String) throws -> URL {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let url = ProjectStore.uniqueURL(named: name, in: root)
-        _ = try ProjectStore.create(at: url, name: url.deletingPathExtension().lastPathComponent)
+        _ = try ProjectStore.create(at: url, name: url.deletingPathExtension().lastPathComponent, series: series)
         refresh()
         return url
     }

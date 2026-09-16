@@ -1,28 +1,29 @@
 import Foundation
 import CoreGraphics
 
-/// A comic the project cites. Referenced, not copied: the path is where it
-/// was last seen, and the name and size are how it's found again if it moves.
-public struct ComicRef: Codable, Equatable, Sendable, Identifiable {
-    /// Stable for the life of the project, whatever happens to the file.
-    public var id: String
-    public var title: String
-    public var path: String
+/// A comic the project cites: one item of the library — a volume, or a
+/// chapter. Referenced by the same id the library uses (filename and size),
+/// so the editor's Mac finds it in *their* library, wherever it sits.
+public struct ItemRef: Codable, Equatable, Sendable, Identifiable {
+    public var id: String { itemID }
+    public var itemID: String
     public var filename: String
     public var fileSize: Int
-    /// The series the comic belongs to — "Berserk", "Dragon Ball + Super" —
-    /// recorded when it joins a project so projects can be grouped without
-    /// re-reading filenames. Older manifests don't have it.
-    public var series: String?
+    public var series: String
+    public var volume: Int?
+    public var chapter: Int?
+    /// "Vol. 1", "Ch. 24 · Kame Sen'nin's Training Fee".
+    public var title: String
 
-    public init(id: String = ProjectManifest.makeID(), title: String, path: String, filename: String,
-                fileSize: Int, series: String? = nil) {
-        self.id = id
-        self.title = title
-        self.path = path
+    public init(itemID: String, filename: String, fileSize: Int, series: String,
+                volume: Int? = nil, chapter: Int? = nil, title: String) {
+        self.itemID = itemID
         self.filename = filename
         self.fileSize = fileSize
         self.series = series
+        self.volume = volume
+        self.chapter = chapter
+        self.title = title
     }
 }
 
@@ -30,7 +31,8 @@ public struct ComicRef: Codable, Equatable, Sendable, Identifiable {
 /// `panels://cite/<id>`; here is everything the link means.
 public struct Citation: Codable, Equatable, Sendable, Identifiable {
     public var id: String
-    public var comicID: String
+    /// The library item the page is in.
+    public var itemID: String
     /// Zero-based index of the (first) page.
     public var pageIndex: Int
     /// One-based page numbers as cited, ascending.
@@ -46,11 +48,11 @@ public struct Citation: Codable, Equatable, Sendable, Identifiable {
     public var text: String
     public var date: Date
 
-    public init(id: String = ProjectManifest.makeID(), comicID: String, pageIndex: Int, pageNumbers: [Int],
+    public init(id: String = ProjectManifest.makeID(), itemID: String, pageIndex: Int, pageNumbers: [Int],
                 panel: Int? = nil, polygon: [CGPoint]? = nil, region: CGRect? = nil,
                 captureFile: String? = nil, text: String, date: Date = Date()) {
         self.id = id
-        self.comicID = comicID
+        self.itemID = itemID
         self.pageIndex = pageIndex
         self.pageNumbers = pageNumbers
         self.panel = panel
@@ -62,47 +64,39 @@ public struct Citation: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// Everything about a project except the script itself.
+/// Everything about a project except the script itself. A project is about
+/// one series; reading positions belong to the library, not to it.
 public struct ProjectManifest: Codable, Equatable, Sendable {
+    public static let currentVersion = 2
+
     public var version: Int
     public var name: String
-    public var comics: [ComicRef]
+    /// The series the script is about — "Berserk", "Dragon Ball + Super".
+    public var series: String
+    /// The items cited so far, in the order they were first cited.
+    public var items: [ItemRef]
     public var citations: [Citation]
-    /// Reading position (spread index) per comic id.
-    public var positions: [String: Int]
-    /// The comic that was open last, to reopen with the project.
-    public var lastComicID: String?
-    /// The folder of chapters the script was being read from, if it was a
-    /// series rather than a single file — so reopening brings the chapter
-    /// list back.
-    public var seriesFolder: String?
 
-    public init(name: String, comics: [ComicRef] = [], citations: [Citation] = [],
-                positions: [String: Int] = [:], lastComicID: String? = nil, seriesFolder: String? = nil) {
-        self.version = 1
+    public init(name: String, series: String, items: [ItemRef] = [], citations: [Citation] = []) {
+        self.version = Self.currentVersion
         self.name = name
-        self.comics = comics
+        self.series = series
+        self.items = items
         self.citations = citations
-        self.positions = positions
-        self.lastComicID = lastComicID
-        self.seriesFolder = seriesFolder
     }
 
     public func citation(id: String) -> Citation? {
         citations.first { $0.id == id }
     }
 
-    public func comic(id: String) -> ComicRef? {
-        comics.first { $0.id == id }
+    public func item(id: String) -> ItemRef? {
+        items.first { $0.itemID == id }
     }
 
-    /// The comic for a file, matching the path first and then the name and
-    /// size — the same file moved.
-    public func comic(for url: URL) -> ComicRef? {
-        let path = url.standardizedFileURL.path
-        if let byPath = comics.first(where: { $0.path == path }) { return byPath }
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? -1
-        return comics.first { $0.filename == url.lastPathComponent && $0.fileSize == size }
+    /// Adds an item the first time it's cited.
+    public mutating func register(_ ref: ItemRef) {
+        guard item(id: ref.itemID) == nil else { return }
+        items.append(ref)
     }
 
     /// Short, unambiguous, safe in a URL: six characters of base-36.

@@ -20,13 +20,17 @@ let package = Package(
         .target(name: "PageCapture"),
         // A project: the script, its citations, and what they point at. No UI.
         .target(name: "PanelsProject"),
+        // The library: folders of comics understood as series, volumes, arcs
+        // and chapters. No UI.
+        .target(name: "ComicLibrary", dependencies: ["ComicArchive"]),
         // The SwiftUI reader.
-        .executableTarget(name: "Panels", dependencies: ["ComicArchive", "PageSearch", "PageCapture", "PanelsProject"]),
+        .executableTarget(name: "Panels", dependencies: ["ComicArchive", "PageSearch", "PageCapture", "PanelsProject", "ComicLibrary"]),
         .testTarget(name: "ComicArchiveTests", dependencies: ["ComicArchive"]),
         .testTarget(name: "PageSearchTests", dependencies: ["PageSearch", "ComicArchive"]),
         .testTarget(name: "PageCaptureTests", dependencies: ["PageCapture", "ComicArchive"]),
         .testTarget(name: "PanelsProjectTests", dependencies: ["PanelsProject"]),
+        .testTarget(name: "ComicLibraryTests", dependencies: ["ComicLibrary"]),
         // The reader's model driven the way the menus drive it.
-        .testTarget(name: "PanelsTests", dependencies: ["Panels", "PanelsProject"]),
+        .testTarget(name: "PanelsTests", dependencies: ["Panels", "PanelsProject", "ComicLibrary", "ComicArchive"]),
     ]
 )

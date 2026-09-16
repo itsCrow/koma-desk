@@ -251,6 +251,57 @@ extension ComicArchive {
     }
 }
 
+// MARK: - Covers
+
+extension ComicArchive {
+    /// The bytes of the first page image, read straight out of the archive
+    /// without extracting the rest — for a cover. Uses the extraction cache
+    /// when the comic has already been opened.
+    public static func firstPageData(of url: URL) throws -> Data {
+        if let cached = try? open(url), let first = cached.pages.first,
+           let data = try? Data(contentsOf: first), !data.isEmpty {
+            return data
+        }
+        guard let handle = archive_read_new() else {
+            throw ArchiveError.cacheFailure(detail: "libarchive could not allocate a reader.")
+        }
+        defer { archive_read_free(handle) }
+        archive_read_support_filter_all(handle)
+        archive_read_support_format_rar(handle)
+        archive_read_support_format_rar5(handle)
+        archive_read_support_format_zip(handle)
+        archive_read_support_format_7zip(handle)
+        guard url.path.withCString({ archive_read_open_filename(handle, $0, 65536) }) == ok else {
+            throw ArchiveError.unrecognizedFormat(filename: url.lastPathComponent, detail: errorMessage(handle))
+        }
+        // Entries are in the order the archive holds them, which for a comic
+        // is page order — but the first *image* is what we want, and its name
+        // has to pass the same filter pages do.
+        var candidates: [(String, Data)] = []
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        while true {
+            var entry: OpaquePointer?
+            let status = archive_read_next_header(handle, &entry)
+            if status == eof || status < warn { break }
+            guard let entry, archive_entry_filetype(entry) & regularFileBit != 0,
+                  let raw = entryPath(entry), let relative = sanitize(raw) else { continue }
+            var contents = Data()
+            while true {
+                let read = buffer.withUnsafeMutableBytes { archive_read_data(handle, $0.baseAddress, $0.count) }
+                if read <= 0 { break }
+                contents.append(contentsOf: buffer[0..<read])
+            }
+            if !contents.isEmpty { candidates.append((relative, contents)) }
+            // A handful is enough to pick the first page from a stored-order archive.
+            if candidates.count >= 4 { break }
+        }
+        guard let first = sortedNaturally(candidates.map(\.0)).first,
+              let data = candidates.first(where: { $0.0 == first })?.1
+        else { throw ArchiveError.noPages(filename: url.lastPathComponent) }
+        return data
+    }
+}
+
 // MARK: - Extraction manifest
 
 extension ComicArchive {

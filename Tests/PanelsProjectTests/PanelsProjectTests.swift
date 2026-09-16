@@ -104,45 +104,49 @@ struct ProjectStoreTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("Test.panelsproject", isDirectory: true)
 
-        var loaded = try ProjectStore.create(at: url, name: "Test")
+        var loaded = try ProjectStore.create(at: url, name: "Test", series: "Berserk")
         #expect(FileManager.default.fileExists(atPath: ProjectStore.capturesFolder(of: url).path))
         #expect(loaded.manifest.name == "Test")
+        #expect(loaded.manifest.series == "Berserk")
+        #expect(loaded.manifest.version == ProjectManifest.currentVersion)
 
-        let comic = ComicRef(title: "Berserk", path: "/x/Berserk v01.cbz", filename: "Berserk v01.cbz", fileSize: 42)
-        let cite = Citation(comicID: comic.id, pageIndex: 116, pageNumbers: [117], panel: 3,
+        let item = ItemRef(itemID: "Berserk v01.cbz|42", filename: "Berserk v01.cbz", fileSize: 42,
+                           series: "Berserk", volume: 1, title: "Vol. 1")
+        let cite = Citation(itemID: item.itemID, pageIndex: 116, pageNumbers: [117], panel: 3,
                             polygon: [CGPoint(x: 0.1, y: 0.2), CGPoint(x: 0.5, y: 0.2), CGPoint(x: 0.3, y: 0.6)],
                             captureFile: "Berserk v01 p117 panel3.png", text: "Berserk, Vol. 1, p. 117, panel 3")
-        loaded.manifest.comics = [comic]
+        loaded.manifest.register(item)
+        loaded.manifest.register(item)   // citing the same volume again adds nothing
         loaded.manifest.citations = [cite]
-        loaded.manifest.positions[comic.id] = 58
         loaded.script = "Here [\(cite.text)](panels://cite/\(cite.id))."
         try ProjectStore.save(loaded, to: url)
 
         let back = try ProjectStore.load(url)
-        #expect(back.manifest.comics == [comic])
+        #expect(back.manifest.items == [item])
         #expect(back.manifest.citations.count == 1)
         #expect(back.manifest.citations[0].id == cite.id)
+        #expect(back.manifest.citations[0].itemID == item.itemID)
         #expect(back.manifest.citations[0].polygon == cite.polygon)
-        #expect(back.manifest.positions[comic.id] == 58)
         #expect(back.script == loaded.script)
         #expect(back.manifest.citation(id: cite.id)?.panel == 3)
+        #expect(back.manifest.item(id: item.itemID)?.volume == 1)
     }
 
-    @Test("A moved comic is matched by name and size")
-    func relocate() throws {
+    @Test("A project from the earlier format is refused, not half-read")
+    func refusesOldFormat() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("Berserk v01.cbz")
-        try Data(repeating: 1, count: 1234).write(to: file)
+        let url = dir.appendingPathComponent("Old.panelsproject", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let legacy = """
+        {"version":1,"name":"Old","comics":[{"id":"abc123","title":"Berserk v01","path":"/x/b.cbz","filename":"b.cbz","fileSize":5}],"citations":[],"positions":{}}
+        """
+        try Data(legacy.utf8).write(to: ProjectStore.manifestURL(of: url))
 
-        let ref = ComicRef(title: "Berserk", path: "/gone/Berserk v01.cbz", filename: "Berserk v01.cbz", fileSize: 1234)
-        let manifest = ProjectManifest(name: "T", comics: [ref])
-        #expect(manifest.comic(for: file)?.id == ref.id)
-        let other = dir.appendingPathComponent("Other.cbz")
-        try Data(repeating: 1, count: 99).write(to: other)
-        #expect(manifest.comic(for: other) == nil)
+        #expect(throws: ProjectError.unsupportedVersion(1)) { try ProjectStore.load(url) }
+        #expect(throws: ProjectError.unsupportedVersion(1)) { try ProjectStore.loadManifest(url) }
+        #expect(ProjectError.unsupportedVersion(1).errorDescription?.contains("earlier version") == true)
     }
 
     @Test("Listing a folder finds its projects and nothing else")
@@ -152,8 +156,8 @@ struct ProjectStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        _ = try ProjectStore.create(at: root.appendingPathComponent("A.panelsproject"), name: "A")
-        _ = try ProjectStore.create(at: root.appendingPathComponent("B.panelsproject"), name: "B")
+        _ = try ProjectStore.create(at: root.appendingPathComponent("A.panelsproject"), name: "A", series: "S")
+        _ = try ProjectStore.create(at: root.appendingPathComponent("B.panelsproject"), name: "B", series: "S")
         // Things that look like projects but aren't.
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Empty.panelsproject"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Folder"), withIntermediateDirectories: true)
@@ -175,24 +179,10 @@ struct ProjectStoreTests {
 
         let first = ProjectStore.uniqueURL(named: "Eclipse", in: root)
         #expect(first.lastPathComponent == "Eclipse.panelsproject")
-        _ = try ProjectStore.create(at: first, name: "Eclipse")
+        _ = try ProjectStore.create(at: first, name: "Eclipse", series: "Berserk")
         #expect(ProjectStore.uniqueURL(named: "Eclipse", in: root).lastPathComponent == "Eclipse 2.panelsproject")
         #expect(ProjectStore.uniqueURL(named: "Ch: 1/2", in: root).lastPathComponent == "Ch 12.panelsproject")
         #expect(ProjectStore.uniqueURL(named: "   ", in: root).lastPathComponent == "Untitled.panelsproject")
-    }
-
-    @Test("A manifest without a series still decodes; one with it keeps it")
-    func seriesOptional() throws {
-        let legacy = """
-        {"version":1,"name":"Old","comics":[{"id":"abc123","title":"Berserk v01","path":"/x/b.cbz","filename":"b.cbz","fileSize":5}],"citations":[],"positions":{}}
-        """
-        let decoder = JSONDecoder()
-        let old = try decoder.decode(ProjectManifest.self, from: Data(legacy.utf8))
-        #expect(old.comics[0].series == nil)
-
-        let ref = ComicRef(title: "Berserk v01", path: "/x/b.cbz", filename: "b.cbz", fileSize: 5, series: "Berserk")
-        let data = try JSONEncoder().encode(ProjectManifest(name: "New", comics: [ref]))
-        #expect(try decoder.decode(ProjectManifest.self, from: data).comics[0].series == "Berserk")
     }
 
     @Test("IDs are short, URL-safe and distinct")

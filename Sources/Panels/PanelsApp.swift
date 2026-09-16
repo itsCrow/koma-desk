@@ -18,15 +18,14 @@ struct PanelsApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Project…") { model.requestNewProject() }
                     .keyboardShortcut("n")
-                Button("Projects…") { model.showsProjects = true }
+                    .disabled(model.library.isEmpty)
+                Button("Library and Projects…") { model.showsHome = true }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
-                    .disabled(!model.hasComic && model.project == nil)
+                    .disabled(!model.hasComic)
                 Button("Open Project…") { model.presentOpenProjectPanel() }
                     .keyboardShortcut("o", modifiers: [.command, .option])
-                Button("Open Comic…") { model.presentOpenPanel() }
-                    .keyboardShortcut("o")
-                Button("Open Folder…") { model.presentOpenFolderPanel() }
-                    .keyboardShortcut("o", modifiers: [.command, .shift, .option])
+                Button("Add Folder to Library…") { model.library.presentAddPanel() }
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
             }
 
             CommandGroup(after: .newItem) {
@@ -37,9 +36,10 @@ struct PanelsApp: App {
                     .keyboardShortcut("w", modifiers: [.command, .shift])
                     .disabled(!model.hasComic)
                 Divider()
-                Button("Set Projects Folder…") { model.library.chooseRoot() }
+                Button("Rescan Library") { model.library.rescan() }
+                Button("Set Projects Folder…") { model.projects.chooseRoot() }
                 Button("Reveal Projects Folder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([model.library.root])
+                    NSWorkspace.shared.activateFileViewerSelecting([model.projects.root])
                 }
             }
 
@@ -81,15 +81,16 @@ struct PanelsApp: App {
             }
 
             CommandMenu("Tools") {
+                // Captures are a project's shots, so they need one open.
                 Button(model.isCapturing ? "Stop Drawing" : "Draw Around a Panel") { model.toggleCapture() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
-                    .disabled(!model.hasComic)
+                    .disabled(!model.canCapture)
                 Button("Save Whole Page") { model.savePage() }
                     .keyboardShortcut("p", modifiers: [.command, .shift, .option])
-                    .disabled(!model.hasComic)
+                    .disabled(!model.canCapture)
                 Divider()
-                Button("Set Captures Folder…") { model.chooseCapturesRoot() }
-                Button("Reveal Captures Folder") { model.revealCapturesFolder() }
+                Button("Reveal Captures in Finder") { model.revealCaptures() }
+                    .disabled(model.project == nil)
             }
 
             CommandMenu("Go") {
@@ -113,18 +114,21 @@ struct PanelsApp: App {
                     .keyboardShortcut(model.isScriptEditing ? nil : KeyboardShortcut(.end, modifiers: []))
                     .disabled(!model.hasComic)
                 Divider()
-                Button("Next Chapter") { model.nextChapter() }
+                Button("Next \(model.itemNoun)") { model.nextItem() }
                     .keyboardShortcut(.downArrow, modifiers: [.option])
-                    .disabled(!model.hasNextChapter)
-                Button("Previous Chapter") { model.previousChapter() }
+                    .disabled(!model.hasNextItem)
+                Button("Previous \(model.itemNoun)") { model.previousItem() }
                     .keyboardShortcut(.upArrow, modifiers: [.option])
-                    .disabled(!model.hasPreviousChapter)
+                    .disabled(!model.hasPreviousItem)
+                Divider()
+                Button("Back to Series") { model.showSeriesPage() }
+                    .disabled(model.series == nil)
             }
 
             CommandGroup(after: .toolbar) {
-                Button(model.showsChapters ? "Hide Chapters" : "Show Chapters") { model.showsChapters.toggle() }
+                Button(model.showsContents ? "Hide Contents" : "Show Contents") { model.showsContents.toggle() }
                     .keyboardShortcut("c", modifiers: [.command, .option])
-                    .disabled(model.seriesRoot == nil)
+                    .disabled(!model.hasContents)
                 Divider()
                 Picker("Reading Direction", selection: $model.direction) {
                     ForEach(ReadingDirection.allCases, id: \.self) { direction in
