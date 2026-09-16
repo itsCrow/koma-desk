@@ -416,7 +416,11 @@ struct ReaderProjectTests {
         #expect(project.pendingSpanCommand == .start(span))
         project.pendingSpanCommand = nil
 
-        // Read on, still writing about the same beat.
+        // The page a range opens is the page it starts on.
+        #expect(span.firstPageIndex == span.firstPage - 1)
+
+        // Extending only ever touches the block the cursor is in.
+        model.spanAtCursor = span.id
         model.goTo(spread: 12)
         let reached = try #require(model.visiblePages.map(\.number).max())
         model.extendPageRange()
@@ -425,6 +429,23 @@ struct ReaderProjectTests {
         #expect(stretched.lastPage == reached)
         // Still one range, not two.
         #expect(project.manifest.spans.count == 1)
+
+        // Reading back moves the start, and the page it opens moves with it.
+        model.goTo(spread: 1)
+        let backTo = try #require(model.visiblePages.map(\.number).min())
+        model.extendPageRange()
+        let widened = try #require(project.manifest.span(id: span.id))
+        #expect(widened.firstPage == backTo)
+        #expect(widened.lastPage == reached)
+        #expect(widened.firstPageIndex == backTo - 1)
+        #expect(widened.text.contains("pp. \(backTo)–\(reached)"))
+
+        // With the cursor outside any block there is nothing to extend.
+        model.spanAtCursor = nil
+        #expect(!model.canExtendPageRange)
+        model.goTo(spread: 20)
+        model.extendPageRange()
+        #expect(project.manifest.span(id: span.id) == widened)
 
         // Ending and removing are the editor's to carry out.
         model.endPageRange()
@@ -465,6 +486,41 @@ struct ReaderProjectTests {
         // No comic is open in this test, so starting can't pick pages — the
         // point is that it tried to start rather than end.
         #expect(project.pendingSpanCommand != .end)
+    }
+
+    @Test("A range never stretches across two comics")
+    func rangesStayInOneComic() async throws {
+        guard let folderPath = Self.folderPath else {
+            withKnownIssue("Set PANELS_TEST_FOLDER to run.") { Issue.record("skipped") }
+            return
+        }
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+
+        model.addToLibrary(URL(fileURLWithPath: folderPath, isDirectory: true))
+        let series = try #require(scratch.library.series.first)
+        #expect(series.items.count >= 2)
+        model.read(series)
+        #expect(await Self.wait { model.hasComic })
+        model.newProject(named: "Arc")
+        let project = try #require(model.project)
+
+        model.goTo(spread: 2)
+        model.startPageRange()
+        let span = try #require(project.manifest.spans.first)
+        model.spanAtCursor = span.id
+
+        // Read on into the next chapter, where the page numbering starts over.
+        model.nextItem()
+        #expect(await Self.wait { model.item?.id == series.items[1].id && !model.isLoading })
+        #expect(await Self.wait { model.hasComic })
+        #expect(!model.canExtendPageRange)
+        model.extendPageRange()
+
+        // Untouched: merging the two numberings would have been nonsense.
+        #expect(project.manifest.span(id: span.id) == span)
+        #expect(model.lastCaptureMessage?.contains("is in") == true)
     }
 
     @Test("A range reaches the script, the shot list and a paste")

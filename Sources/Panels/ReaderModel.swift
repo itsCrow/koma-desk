@@ -836,9 +836,8 @@ final class ReaderModel {
     func startPageRange() {
         guard let project, let item, let source, hasComic else { return }
         let pages = visiblePages.map(\.number).sorted()
-        guard let first = pages.first, let pageIndex = visiblePages.map({ pageIndexByURL[$0.url] ?? 0 }).min()
-        else { return }
-        let span = PageSpan(itemID: item.id, firstPageIndex: pageIndex, pageNumbers: [first, pages.last ?? first],
+        guard let first = pages.first, let last = pages.last else { return }
+        let span = PageSpan(itemID: item.id, firstPageIndex: first - 1, pageNumbers: [first, last],
                             text: ComicIdentity(fileURL: source).citation(pages: pages))
         // On record like a citation's comic, so the range can be named by its
         // chapter rather than only by its pages.
@@ -859,26 +858,38 @@ final class ReaderModel {
         project?.pendingSpanCommand = .remove
     }
 
-    /// Stretches the block being written to the page now on screen — you read
-    /// on while writing about the same beat.
+    /// Stretches the block the cursor is in to the page now on screen — you
+    /// read on while writing about the same beat.
     func extendPageRange() {
-        guard let project, let source, hasComic else { return }
-        // The range still being written is the one most recently started.
-        guard var span = project.spansInScriptOrder.last ?? project.manifest.spans.last else { return }
+        guard let project, let item, let source, hasComic,
+              let id = spanAtCursor, var span = project.manifest.span(id: id)
+        else { return }
+        // Pages only mean anything inside one comic. Reading on into the next
+        // chapter and stretching would merge two unrelated numberings.
+        guard span.itemID == item.id else {
+            lastCaptureMessage = "That range is in \(project.manifest.label(for: span).detail)"
+            return
+        }
         let pages = visiblePages.map(\.number).sorted()
         guard let reached = pages.last else { return }
         let first = min(span.firstPage, pages.first ?? reached)
         let last = max(span.lastPage, reached)
         guard first != span.firstPage || last != span.lastPage else { return }
         span.pageNumbers = [first, last]
+        // Reading *back* moves the start, and the page the margin rule opens
+        // has to move with it.
+        span.firstPageIndex = first - 1
         span.text = ComicIdentity(fileURL: source).citation(pages: [first, last])
         project.manifest.store(span)
         lastCaptureMessage = "Now \(project.manifest.label(for: span).short)"
     }
 
+    /// Only the block the cursor is in, and only while its own comic is open.
     var canExtendPageRange: Bool {
-        guard let project, hasComic else { return false }
-        return !project.manifest.spans.isEmpty
+        guard let project, let item, hasComic, let id = spanAtCursor,
+              let span = project.manifest.span(id: id)
+        else { return false }
+        return span.itemID == item.id
     }
 
     /// Brings the pages a block of writing is about back on screen.
