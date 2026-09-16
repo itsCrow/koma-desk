@@ -488,6 +488,52 @@ struct ReaderProjectTests {
         #expect(project.pendingSpanCommand != .end)
     }
 
+    @Test("The range follows the reading while the block is being written")
+    func rangeFollowsReading() async throws {
+        guard let path = Self.comicPath else {
+            withKnownIssue("Set PANELS_TEST_CBR to run.") { Issue.record("skipped") }
+            return
+        }
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+
+        model.addToLibrary(URL(fileURLWithPath: path))
+        #expect(await Self.wait { model.hasComic })
+        model.newProject(named: "Following")
+        let project = try #require(model.project)
+
+        model.goTo(spread: 4)
+        model.startPageRange()
+        let started = try #require(project.manifest.spans.first)
+        model.spanAtCursor = started.id
+
+        // Read on, saying nothing. The block grows with you.
+        model.goTo(spread: 9)
+        let reached = try #require(model.visiblePages.map(\.number).max())
+        let grown = try #require(project.manifest.span(id: started.id))
+        #expect(grown.firstPage == started.firstPage)
+        #expect(grown.lastPage == reached)
+
+        // Turning back to check something leaves the start where it was.
+        model.goTo(spread: 1)
+        let afterBack = try #require(project.manifest.span(id: started.id))
+        #expect(afterBack == grown)
+
+        // With no block being written, reading changes nothing.
+        model.spanAtCursor = nil
+        model.goTo(spread: 30)
+        #expect(project.manifest.span(id: started.id) == grown)
+
+        // Reopening at a remembered position is not reading, either.
+        model.spanAtCursor = started.id
+        model.closeComic()
+        let item = try #require(scratch.library.series.first?.items.first)
+        model.open(item: item)
+        #expect(await Self.wait { model.hasComic })
+        #expect(project.manifest.span(id: started.id) == grown)
+    }
+
     @Test("A range never stretches across two comics")
     func rangesStayInOneComic() async throws {
         guard let folderPath = Self.folderPath else {

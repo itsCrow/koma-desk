@@ -143,6 +143,7 @@ final class ReaderModel {
         didSet {
             guard spreadIndex != oldValue else { return }
             if let item { library.setPosition(spreadIndex, for: item) }
+            followReadingWhileWriting()
             prefetchNeighbours()
             // Turning the page means you're done capturing from this one.
             isCapturing = false
@@ -171,6 +172,10 @@ final class ReaderModel {
     /// Where to land in the item being opened: its start when reading
     /// forward into it, its end when reading back into it.
     @ObservationIgnored private var pendingStart: ItemStart?
+    /// True while the reader is being put somewhere rather than read there —
+    /// restoring a position, following a citation. A block being written
+    /// shouldn't swallow those pages.
+    @ObservationIgnored private var isRestoringPosition = false
     /// A page to land on once the comic a range points at has opened.
     @ObservationIgnored private var pendingSpanLanding: Int?
     @ObservationIgnored private var focusTask: Task<Void, Never>?
@@ -303,11 +308,13 @@ final class ReaderModel {
         isLoading = false
 
         let restored = item.map { library.position(for: $0) } ?? 0
+        isRestoringPosition = true
         switch pendingStart {
         case .beginning: spreadIndex = 0
         case .end: spreadIndex = max(spreads.count - 1, 0)
         case nil: spreadIndex = min(max(restored, 0), max(spreads.count - 1, 0))
         }
+        isRestoringPosition = false
         pendingStart = nil
         if let item {
             // Landing on the first spread doesn't change spreadIndex, so the
@@ -858,6 +865,25 @@ final class ReaderModel {
         project?.pendingSpanCommand = .remove
     }
 
+    /// Reading on while a block is being written grows the block's range with
+    /// you — that is what "keeps growing" means, and having to say so on every
+    /// page turn made the range stop at wherever it started.
+    ///
+    /// Forward only: turning back to check something leaves the start alone,
+    /// so a block never quietly swallows the pages before it. ⇧⌘R still pulls
+    /// the start back when that is what's wanted.
+    private func followReadingWhileWriting() {
+        guard !isRestoringPosition, let project, let item, hasComic,
+              let id = spanAtCursor, var span = project.manifest.span(id: id),
+              span.itemID == item.id, let source
+        else { return }
+        guard let reached = visiblePages.map(\.number).max(), reached > span.lastPage else { return }
+        span.pageNumbers = [span.firstPage, reached]
+        span.text = ComicIdentity(fileURL: source).citation(pages: [span.firstPage, reached])
+        project.manifest.store(span)
+        lastCaptureMessage = "Now \(project.manifest.label(for: span).short)"
+    }
+
     /// Stretches the block the cursor is in to the page now on screen — you
     /// read on while writing about the same beat.
     func extendPageRange() {
@@ -900,7 +926,9 @@ final class ReaderModel {
             return
         }
         if target.id == item?.id {
+            isRestoringPosition = true
             goToPage(span.firstPageIndex)
+            isRestoringPosition = false
         } else {
             pendingSpanLanding = span.firstPageIndex
             open(item: target)
@@ -909,7 +937,9 @@ final class ReaderModel {
 
     private func land(on citation: Citation) {
         guard let spread = spreads.firstIndex(where: { $0.pageIndices.contains(citation.pageIndex) }) else { return }
+        isRestoringPosition = true
         goTo(spread: spread)
+        isRestoringPosition = false
         guard pages.indices.contains(citation.pageIndex) else { return }
         let page = pages[citation.pageIndex]
         let outline: [PagePoint]
