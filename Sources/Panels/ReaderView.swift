@@ -171,14 +171,26 @@ struct ReaderView: View {
                     WarningBanner(text: warning)
                 }
                 if model.isCapturing {
-                    Label("Click to place corners around a panel · click the first corner or press Return to capture · Esc when done",
-                          systemImage: "crop")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
-                        .glassPanel(cornerRadius: 12)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                    HStack(spacing: 14) {
+                        Label("Click to place corners around a panel · click the first corner or press Return to capture · Esc when done",
+                              systemImage: "crop")
+                        Button {
+                            model.captureVisiblePages()
+                        } label: {
+                            Label("Save Whole Page", systemImage: "doc.on.doc")
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(.white.opacity(0.18), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Save the visible page(s) at full resolution (⌥⇧⌘P)")
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .glassPanel(cornerRadius: 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             .padding(.top, 12)
