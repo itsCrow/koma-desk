@@ -14,14 +14,6 @@ enum CaptureShape {
     case polygon([CGPoint])
 }
 
-/// Which capture tool is in hand.
-enum CaptureTool: Equatable {
-    /// Click a detected panel.
-    case panels
-    /// Draw: click corners for a shape, drag for a rectangle.
-    case draw
-}
-
 extension ReadingDirection {
     /// How the direction is named in the menu. The enum itself lives in
     /// ComicArchive, which has no business knowing about menus.
@@ -55,10 +47,7 @@ final class ReaderModel {
     /// Set by ⌘F; the reader opens the controls panel and focuses the field.
     var wantsSearchFocus = false
     /// Capture mode: clicks and drags on a page save it for the editor.
-    var isCapturing = false {
-        didSet { if isCapturing, !oldValue { captureTool = .panels } }
-    }
-    var captureTool: CaptureTool = .panels
+    var isCapturing = false
     /// "Saved Berserk v01 p119 panel6.png · citation copied", briefly.
     var lastCaptureMessage: String?
     var searchQuery = "" {
@@ -397,14 +386,16 @@ final class ReaderModel {
         return found
     }
 
-    /// Saves a panel (`panel` numbered), a drawn or dragged shape, or the
-    /// whole page — at native resolution, named and tagged with its citation —
-    /// then puts the citation on the clipboard. A polygon is masked: outside
-    /// it the file is transparent.
-    func capture(page pageURL: URL, shape: CaptureShape, panel: Int?) {
+    /// Saves a drawn shape, a dragged rectangle, or the whole page — at native
+    /// resolution, named and tagged with its citation — then puts the citation
+    /// on the clipboard. A polygon is masked: outside it the file is
+    /// transparent. If the shape sits inside a detected panel, the citation
+    /// names that panel.
+    func capture(page pageURL: URL, shape: CaptureShape) {
         guard let source, let folder = capturesFolder,
               let pageIndex = pageIndexByURL[pageURL]
         else { return }
+        let panel = panelNumber(enclosing: shape, on: pageURL)
         let identity = ComicIdentity(fileURL: source)
         let pageNumber = pageIndex + 1
         let citation = identity.citation(pages: [pageNumber], panel: panel)
@@ -469,8 +460,32 @@ final class ReaderModel {
     /// The page or pages on screen, whole.
     func captureVisiblePages() {
         for page in visiblePages {
-            capture(page: page.url, shape: .page, panel: nil)
+            capture(page: page.url, shape: .page)
         }
+    }
+
+    /// Which detected panel, if any, the shape's centre falls in — so a shape
+    /// drawn around panel 3 is cited as panel 3. Detection is only ever used
+    /// for this; it never decides what gets captured.
+    private func panelNumber(enclosing shape: CaptureShape, on pageURL: URL) -> Int? {
+        guard let panels = detectedPanels[pageURL], !panels.isEmpty else { return nil }
+        let centre: CGPoint
+        switch shape {
+        case .page:
+            return nil
+        case .rect(let rect):
+            centre = CGPoint(x: rect.midX, y: rect.midY)
+        case .polygon(let points):
+            guard !points.isEmpty else { return nil }
+            centre = CGPoint(x: points.map(\.x).reduce(0, +) / Double(points.count),
+                             y: points.map(\.y).reduce(0, +) / Double(points.count))
+        }
+        // Smallest containing box wins, so a shape inside a fused region is
+        // still attributed to the tighter panel when there is one.
+        return panels.indices
+            .filter { panels[$0].box.contains(centre) }
+            .min { panels[$0].box.width * panels[$0].box.height < panels[$1].box.width * panels[$1].box.height }
+            .map { $0 + 1 }
     }
 
     // MARK: - Text search

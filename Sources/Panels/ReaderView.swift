@@ -46,16 +46,6 @@ struct ReaderView: View {
             model.toggleCapture()
             return .handled
         }
-        .onKeyPress(KeyEquivalent("1")) {
-            guard model.isCapturing else { return .ignored }
-            model.captureTool = .panels
-            return .handled
-        }
-        .onKeyPress(KeyEquivalent("2")) {
-            guard model.isCapturing else { return .ignored }
-            model.captureTool = .draw
-            return .handled
-        }
         .onKeyPress(.escape) {
             // Capture mode ends first, then a search clears, then the panel goes.
             if model.isCapturing {
@@ -131,9 +121,8 @@ struct ReaderView: View {
             direction: model.direction,
             highlights: highlightsOnPages,
             isCapturing: model.isCapturing,
-            captureTool: model.captureTool,
             panelsProvider: { url in await model.panels(on: url) },
-            onCapture: { url, shape, panel in model.capture(page: url, shape: shape, panel: panel) },
+            onCapture: { url, shape in model.capture(page: url, shape: shape) },
             onEndCapture: { model.isCapturing = false },
             // Swiping or zooming the pages means the reader is reading again.
             onInteraction: { setControls(visible: false) },
@@ -182,23 +171,14 @@ struct ReaderView: View {
                     WarningBanner(text: warning)
                 }
                 if model.isCapturing {
-                    HStack(spacing: 14) {
-                        HStack(spacing: 2) {
-                            toolButton("Panels", tool: .panels, key: "1")
-                            toolButton("Draw", tool: .draw, key: "2")
-                        }
-                        .padding(3)
-                        .background(.white.opacity(0.12), in: Capsule())
-                        Text(model.captureTool == .panels
-                             ? "Click a panel · Esc when done"
-                             : "Click corners for a shape, drag for a rectangle · Return closes · Esc when done")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.9))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .glassPanel(cornerRadius: 14)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    Label("Click to place corners around a panel · click the first corner or press Return to capture · Esc when done",
+                          systemImage: "crop")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .glassPanel(cornerRadius: 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             .padding(.top, 12)
@@ -218,24 +198,6 @@ struct ReaderView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.lastCaptureMessage)
-    }
-
-    private func toolButton(_ title: String, tool: CaptureTool, key: String) -> some View {
-        let selected = model.captureTool == tool
-        return Button { model.captureTool = tool } label: {
-            HStack(spacing: 6) {
-                Text(title)
-                Text(key)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(selected ? .black.opacity(0.6) : .white.opacity(0.5))
-            }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(selected ? .black : .white)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 5)
-            .background(selected ? Color.white.opacity(0.9) : .clear, in: Capsule())
-        }
-        .buttonStyle(.plain)
     }
 
     private func setControls(visible: Bool) {
