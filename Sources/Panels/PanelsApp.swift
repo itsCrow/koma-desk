@@ -38,7 +38,7 @@ struct PanelsApp: App {
                 Button(model.isCapturing ? "Stop Drawing" : "Draw Around a Panel") { model.toggleCapture() }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                     .disabled(!model.hasComic)
-                Button("Save Whole Page") { model.captureVisiblePages() }
+                Button("Save Whole Page") { model.savePage() }
                     .keyboardShortcut("p", modifiers: [.command, .shift, .option])
                     .disabled(!model.hasComic)
                 Divider()

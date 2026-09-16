@@ -48,6 +48,8 @@ final class ReaderModel {
     var wantsSearchFocus = false
     /// Capture mode: clicks and drags on a page save it for the editor.
     var isCapturing = false
+    /// Two pages are up and Save Page was asked for: the reader picks one.
+    var isChoosingPageToSave = false
     /// "Saved Berserk v01 p119 panel6.png · citation copied", briefly.
     var lastCaptureMessage: String?
     var searchQuery = "" {
@@ -65,6 +67,7 @@ final class ReaderModel {
             prefetchNeighbours()
             // Turning the page means you're done capturing from this one.
             isCapturing = false
+            isChoosingPageToSave = false
         }
     }
 
@@ -177,6 +180,7 @@ final class ReaderModel {
 
     func closeComic() {
         isCapturing = false
+        isChoosingPageToSave = false
         detectedPanels = [:]
         indexingTask?.cancel()
         indexingTask = nil
@@ -457,8 +461,27 @@ final class ReaderModel {
         }
     }
 
-    /// The page or pages on screen, whole.
-    func captureVisiblePages() {
+    /// Save the page on screen. With a spread up, asks which one.
+    func savePage() {
+        let pages = visiblePages
+        guard !pages.isEmpty else { return }
+        if pages.count == 1 {
+            capture(page: pages[0].url, shape: .page)
+        } else {
+            isCapturing = false
+            isChoosingPageToSave = true
+        }
+    }
+
+    /// The reader's answer to `savePage` on a spread.
+    func savePage(_ url: URL) {
+        isChoosingPageToSave = false
+        capture(page: url, shape: .page)
+    }
+
+    /// Both pages of the spread, whole.
+    func saveVisiblePages() {
+        isChoosingPageToSave = false
         for page in visiblePages {
             capture(page: page.url, shape: .page)
         }

@@ -47,7 +47,11 @@ struct ReaderView: View {
             return .handled
         }
         .onKeyPress(.escape) {
-            // Capture mode ends first, then a search clears, then the panel goes.
+            // Choosing a page, then capture mode, then a search, then the panel.
+            if model.isChoosingPageToSave {
+                model.isChoosingPageToSave = false
+                return .handled
+            }
             if model.isCapturing {
                 model.isCapturing = false
                 return .handled
@@ -66,6 +70,9 @@ struct ReaderView: View {
         .onChange(of: model.isCapturing) { _, capturing in
             // Capturing is done on the bare page.
             if capturing { setControls(visible: false); focused = true }
+        }
+        .onChange(of: model.isChoosingPageToSave) { _, choosing in
+            if choosing { setControls(visible: false); focused = true }
         }
         .onChange(of: model.lastCaptureMessage) { _, message in
             guard message != nil else { return }
@@ -175,7 +182,7 @@ struct ReaderView: View {
                         Label("Click to place corners around a panel · click the first corner or press Return to capture · Esc when done",
                               systemImage: "crop")
                         Button {
-                            model.captureVisiblePages()
+                            model.savePage()
                         } label: {
                             Label("Save Whole Page", systemImage: "doc.on.doc")
                                 .padding(.horizontal, 10)
@@ -196,6 +203,13 @@ struct ReaderView: View {
             .padding(.top, 12)
             .animation(.easeOut(duration: 0.2), value: model.isCapturing)
         }
+        .overlay {
+            if model.isChoosingPageToSave {
+                PageChooser(model: model)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: model.isChoosingPageToSave)
         .overlay(alignment: .bottom) {
             if let message = model.lastCaptureMessage {
                 Text(message)
@@ -250,6 +264,66 @@ struct ReaderView: View {
 }
 
 // MARK: - Components
+
+/// Two pages are up and one is to be saved: each becomes a big button.
+private struct PageChooser: View {
+    @Bindable var model: ReaderModel
+    @State private var hovered: Int?
+
+    var body: some View {
+        ZStack {
+            // Clicking the black around the pages backs out.
+            Color.black.opacity(0.35)
+                .contentShape(Rectangle())
+                .onTapGesture { model.isChoosingPageToSave = false }
+
+            HStack(spacing: 0) {
+                ForEach(model.visiblePages, id: \.number) { page in
+                    Button {
+                        model.savePage(page.url)
+                    } label: {
+                        VStack(spacing: 10) {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 34, weight: .light))
+                            Text("Save page \(page.number)")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.accentColor.opacity(hovered == page.number ? 0.28 : 0.12))
+                        .overlay(Rectangle().strokeBorder(Color.accentColor.opacity(hovered == page.number ? 0.9 : 0.4), lineWidth: 3))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hovered = $0 ? page.number : (hovered == page.number ? nil : hovered) }
+                }
+            }
+            .padding(.vertical, 40)
+
+            VStack {
+                HStack(spacing: 12) {
+                    Text("Which page?")
+                        .font(.system(size: 14, weight: .semibold))
+                    Button("Both") { model.saveVisiblePages() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 13, weight: .medium))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.white.opacity(0.18), in: Capsule())
+                    Text("Esc to cancel")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .glassPanel(cornerRadius: 12)
+                .padding(.top, 12)
+                Spacer()
+            }
+        }
+    }
+}
 
 private struct WarningBanner: View {
     let text: String

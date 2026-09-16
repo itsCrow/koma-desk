@@ -61,7 +61,7 @@ struct ReaderControlsPanel: View {
                         .padding(.trailing, 6)
                         .transition(.opacity)
                 }
-                cornerButton("doc.on.doc", help: "Save Page (⌥⇧⌘P)") { model.captureVisiblePages() }
+                cornerButton("doc.on.doc", help: "Save Page (⌥⇧⌘P)") { model.savePage() }
                 cornerButton("crop", help: "Draw Around a Panel (⇧⌘P)") { model.toggleCapture() }
                 cornerButton("quote.opening", help: "Copy Citation") { copyCitation() }
                 cornerButton("arrow.up.left.and.arrow.down.right", help: "Full Screen") {
