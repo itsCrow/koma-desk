@@ -28,7 +28,7 @@ struct ScriptEditorView: NSViewRepresentable {
         textView.onFocusChange = { editing in model.isScriptEditing = editing }
         let coordinator = context.coordinator
         textView.onHoverChip = { [weak coordinator] chip, rect in coordinator?.hover(chip, at: rect) }
-        textView.onHoverSpan = { [weak coordinator] id, rect in coordinator?.hoverSpan(id, at: rect) }
+        textView.spanLabel = { [weak coordinator] id in coordinator?.spanLabelText(for: id) }
         textView.onClickSpan = { [weak coordinator] id in coordinator?.goToSpan(id) }
         textView.markdown = { [weak coordinator] range in coordinator?.markdown(of: range) ?? "" }
         textView.attributedString = { [weak coordinator] markdown in coordinator?.render(markdown) ?? NSAttributedString() }
@@ -447,34 +447,16 @@ struct ScriptEditorView: NSViewRepresentable {
             model.jump(toSpan: id)
         }
 
-        /// The range a block is about, shown the way a chip's citation is.
-        func hoverSpan(_ id: String?, at rect: NSRect) {
-            previewTask?.cancel()
-            guard let id, let textView, let span = project.manifest.span(id: id) else {
-                preview?.close()
-                preview = nil
-                return
+        /// How a block's range reads on its own edge. The chapter is worth
+        /// saying only when it isn't the one on screen — inside it, the pages
+        /// are the whole story.
+        func spanLabelText(for id: String) -> String? {
+            guard let span = project.manifest.span(id: id) else { return nil }
+            let label = project.manifest.label(for: span)
+            if span.itemID == model.item?.id {
+                return label.pages.isEmpty ? label.full : label.pages
             }
-            previewTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(220))
-                guard !Task.isCancelled, let self else { return }
-                self.preview?.close()
-                let popover = NSPopover()
-                popover.behavior = .applicationDefined
-                popover.animates = false
-                popover.appearance = NSAppearance(named: .darkAqua)
-                popover.contentViewController = NSHostingController(
-                    rootView: SpanPreview(label: self.project.manifest.label(for: span)))
-                // Below the block, against the margin — the same place every
-                // time. Anchoring to the left of the rule put it out over the
-                // comic pages, and it flipped back over the writing whenever
-                // there wasn't room. Clamped to what's on screen so a block
-                // taller than the pane can't fling it somewhere odd.
-                var anchor = rect.intersection(textView.visibleRect)
-                if anchor.isNull || anchor.isEmpty { anchor = rect }
-                popover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
-                self.preview = popover
-            }
+            return label.short
         }
 
         private func currentStyle() -> ScriptStyle.Paragraph {
@@ -548,38 +530,6 @@ struct ScriptEditorView: NSViewRepresentable {
     }
 }
 
-/// What a block of writing is about, while the mouse is over it.
-private struct SpanPreview: View {
-    let label: ReferenceLabel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // The pages are the point, so they get the size and never wrap
-            // away; what they belong to sits under them and may wrap.
-            HStack(spacing: 6) {
-                Image(systemName: "book.pages")
-                    .font(.system(size: 12, weight: .semibold))
-                Text(label.pages.isEmpty ? label.full : label.pages)
-                    .font(.system(size: 14, weight: .semibold))
-            }
-            .foregroundStyle(.orange)
-            if !label.detail.isEmpty {
-                Text(label.detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Text("Click the rule in the margin to open these pages")
-                .font(.system(size: 10))
-                .foregroundStyle(.white.opacity(0.4))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: 240, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-    }
-}
-
 // MARK: - Text view
 
 /// Says when it has the keyboard, so the reader's own keys — space to turn
@@ -595,10 +545,10 @@ final class ScriptTextView: NSTextView {
     var attributedString: ((String) -> NSAttributedString)?
     /// The chip under the mouse and where it is, or nil when there isn't one.
     var onHoverChip: ((CitationAttachment?, NSRect) -> Void)?
-    /// The block of writing under the mouse and where it is.
-    var onHoverSpan: ((String?, NSRect) -> Void)?
     /// The writer clicked a block's margin rule: go to its first page.
     var onClickSpan: ((String) -> Void)?
+    /// How a block's page range reads — the view knows ids, not ranges.
+    var spanLabel: ((String) -> String?)?
 
     private var hoverTracking: NSTrackingArea?
     private weak var hoveredChip: CitationAttachment?
@@ -675,9 +625,9 @@ final class ScriptTextView: NSTextView {
         super.drawBackground(in: rect)
         for run in spanRuns() {
             guard let box = box(for: run.range), box.intersects(rect) else { continue }
-            let hovered = run.id == hoveredSpan
+            let hovered = isShowingCard(run.id)
             let path = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
-            ScriptStyle.spanFill(hovered: hovered).setFill()
+            ScriptStyle.spanFill().setFill()
             path.fill()
             ScriptStyle.spanStroke(hovered: hovered).setStroke()
             path.lineWidth = 1
@@ -686,6 +636,68 @@ final class ScriptTextView: NSTextView {
             NSColor.systemOrange.withAlphaComponent(hovered ? 1 : 0.6).setFill()
             rule.fill()
         }
+    }
+
+    /// Whether this block should be showing its range rather than its writing.
+    private func isShowingCard(_ id: String) -> Bool {
+        id == hoveredSpan
+    }
+
+    /// The writing is drawn by the text system on top of `drawBackground`, so
+    /// the card has to come after it — over the words rather than behind them.
+    ///
+    /// That's the whole idea: while you're looking for the range you aren't
+    /// reading the block, so the block's own area is free to say what it's
+    /// about. Nothing is taken from the layout for information wanted only
+    /// now and then.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        for run in spanRuns() where isShowingCard(run.id) {
+            guard let box = box(for: run.range), box.intersects(dirtyRect) else { continue }
+            drawCard(for: run.id, on: box)
+        }
+    }
+
+    private func drawCard(for id: String, on box: NSRect) {
+        guard let text = spanLabel?(id), !text.isEmpty else { return }
+        let card = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+        // Opaque: half-hidden writing showed through and fought the range for
+        // attention, which is the opposite of the point. The card's own bounds
+        // are what say which block this is.
+        ScriptStyle.background.setFill()
+        card.fill()
+        NSColor.systemOrange.withAlphaComponent(0.16).setFill()
+        card.fill()
+        NSColor.systemOrange.withAlphaComponent(0.9).setStroke()
+        card.lineWidth = 1
+        card.stroke()
+
+        let range = NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+            .foregroundColor: NSColor.systemOrange,
+        ])
+        let hint = NSAttributedString(string: "Click to open these pages", attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.5),
+        ])
+        let inset: CGFloat = 16
+        let width = max(box.width - inset * 2, 0)
+        guard width > 20 else { return }
+        let rangeSize = range.size()
+
+        // A one-line block has room for the range alone; crowding the hint in
+        // would clip them both.
+        guard box.height >= rangeSize.height + hint.size().height + 20 else {
+            range.draw(with: NSRect(x: box.minX + inset, y: box.midY - rangeSize.height / 2,
+                                    width: width, height: rangeSize.height),
+                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            return
+        }
+        range.draw(with: NSRect(x: box.minX + inset, y: box.minY + 10, width: width, height: rangeSize.height),
+                   options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        hint.draw(with: NSRect(x: box.minX + inset, y: box.minY + 12 + rangeSize.height,
+                               width: width, height: hint.size().height),
+                  options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 
     /// The block under a point, and the box it's drawn in.
@@ -725,26 +737,19 @@ final class ScriptTextView: NSTextView {
                 hoveredChip = chip
                 onHoverChip?(chip, rect)
             }
-            if hoveredSpan != nil { hoveredSpan = nil; onHoverSpan?(nil, .zero) }
+            hoveredSpan = nil
             return
         }
         if hoveredChip != nil {
             hoveredChip = nil
             onHoverChip?(nil, .zero)
         }
-        let found = spanRule(at: point)
-        if found?.id != hoveredSpan {
-            hoveredSpan = found?.id
-            onHoverSpan?(found?.id, found?.rule ?? .zero)
-        }
+        hoveredSpan = spanRule(at: point)?.id
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        if hoveredSpan != nil {
-            hoveredSpan = nil
-            onHoverSpan?(nil, .zero)
-        }
+        hoveredSpan = nil
         if hoveredChip != nil {
             hoveredChip = nil
             onHoverChip?(nil, .zero)
@@ -861,8 +866,8 @@ enum ScriptStyle {
 
     /// Orange, so a block of writing about a range never reads as a citation
     /// chip, which is the accent colour.
-    static func spanFill(hovered: Bool) -> NSColor {
-        NSColor.systemOrange.withAlphaComponent(hovered ? 0.20 : 0.10)
+    static func spanFill() -> NSColor {
+        NSColor.systemOrange.withAlphaComponent(0.10)
     }
     static func spanStroke(hovered: Bool) -> NSColor {
         NSColor.systemOrange.withAlphaComponent(hovered ? 0.75 : 0.35)

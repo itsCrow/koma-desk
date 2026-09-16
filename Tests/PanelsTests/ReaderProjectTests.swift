@@ -649,6 +649,25 @@ struct ReaderProjectTests {
         #expect(textView.spanRuns().count == 1)
     }
 
+    @Test("A block's label says the pages, and the chapter only when it differs")
+    func spanLabelText() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, _, project) = try editor(script: "Nothing yet.", in: scratch)
+
+        project.register(ItemRef(itemID: "ch24|1", filename: "Chapter 024.cbr", fileSize: 1,
+                                 series: "Dragon Ball + Super", chapter: 24, title: "Ch. 24"))
+        let elsewhere = PageSpan(id: "k7m2pq", itemID: "ch24|1", firstPageIndex: 3,
+                                 pageNumbers: [4, 7], text: "Dragon Ball + Super, Ch. 24, pp. 4–7")
+        project.manifest.store(elsewhere)
+
+        // No comic open, so the block is not about what's on screen: the
+        // chapter earns its place.
+        #expect(coordinator.spanLabelText(for: "k7m2pq") == "Ch. 24 · pp. 4–7")
+        // An id nothing knows about draws nothing at all.
+        #expect(coordinator.spanLabelText(for: "nope12") == nil)
+    }
+
     @Test("A block keeps growing as the writing continues, until it's ended")
     func blockKeepsGrowing() throws {
         let scratch = try Scratch()
