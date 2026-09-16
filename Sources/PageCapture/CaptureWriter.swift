@@ -47,6 +47,7 @@ public struct CaptureWriter: Sendable {
         page.kind = .page
         page.panel = nil
         page.region = nil
+        page.polygon = nil
         return FileManager.default.fileExists(atPath: folder.appendingPathComponent(Self.filename(for: page)).path)
     }
 
@@ -66,7 +67,7 @@ public struct CaptureWriter: Sendable {
     // MARK: - Names
 
     /// "Berserk v01 p117 panel3.png", "Dragon Ball + Super ch052 p4 crop.png",
-    /// "Berserk v01 p117 page.png".
+    /// "Berserk v01 p117 shape.png", "Berserk v01 p117 page.png".
     public static func filename(for record: CaptureRecord) -> String {
         var parts = [record.series]
         if let volume = record.volume { parts.append(String(format: "v%02d", volume)) }
@@ -77,6 +78,7 @@ public struct CaptureWriter: Sendable {
         switch record.kind {
         case .panel: parts.append("panel\(record.panel ?? 0)")
         case .region: parts.append("crop")
+        case .shape: parts.append("shape")
         case .page: parts.append("page")
         }
         return sanitised(parts.joined(separator: " ")) + ".png"

@@ -6,6 +6,22 @@ import ComicArchive
 import PageSearch
 import PageCapture
 
+/// What a capture covers.
+enum CaptureShape {
+    case page
+    case rect(CGRect)
+    /// Unit coords, top-left origin. Everything outside is transparent.
+    case polygon([CGPoint])
+}
+
+/// Which capture tool is in hand.
+enum CaptureTool: Equatable {
+    /// Click a detected panel.
+    case panels
+    /// Draw: click corners for a shape, drag for a rectangle.
+    case draw
+}
+
 extension ReadingDirection {
     /// How the direction is named in the menu. The enum itself lives in
     /// ComicArchive, which has no business knowing about menus.
@@ -39,7 +55,10 @@ final class ReaderModel {
     /// Set by ⌘F; the reader opens the controls panel and focuses the field.
     var wantsSearchFocus = false
     /// Capture mode: clicks and drags on a page save it for the editor.
-    var isCapturing = false
+    var isCapturing = false {
+        didSet { if isCapturing, !oldValue { captureTool = .panels } }
+    }
+    var captureTool: CaptureTool = .panels
     /// "Saved Berserk v01 p119 panel6.png · citation copied", briefly.
     var lastCaptureMessage: String?
     var searchQuery = "" {
@@ -75,7 +94,7 @@ final class ReaderModel {
     @ObservationIgnored private var indexingTask: Task<Void, Never>?
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private let indexStore = TextIndexStore()
-    @ObservationIgnored private var detectedPanels: [URL: [CGRect]] = [:]
+    @ObservationIgnored private var detectedPanels: [URL: [DetectedPanel]] = [:]
 
     private static let directionKey = "PanelsReadingDirection"
 
@@ -368,30 +387,45 @@ final class ReaderModel {
     }
 
     /// Panels on a page, detected once and kept for the life of the comic.
-    func panels(on pageURL: URL) async -> [CGRect] {
+    func panels(on pageURL: URL) async -> [DetectedPanel] {
         if let known = detectedPanels[pageURL] { return known }
         let rightToLeft = direction == .rightToLeft
         let found = await Task.detached(priority: .userInitiated) {
-            PanelDetector.panels(in: pageURL, rightToLeft: rightToLeft)
+            PanelDetector.detect(in: pageURL, rightToLeft: rightToLeft)
         }.value
         detectedPanels[pageURL] = found
         return found
     }
 
-    /// Saves a panel, a dragged region (`panel` nil) or, with no rect, the
+    /// Saves a panel (`panel` numbered), a drawn or dragged shape, or the
     /// whole page — at native resolution, named and tagged with its citation —
-    /// then puts the citation on the clipboard.
-    func capture(page pageURL: URL, unitRect: CGRect?, panel: Int?) {
+    /// then puts the citation on the clipboard. A polygon is masked: outside
+    /// it the file is transparent.
+    func capture(page pageURL: URL, shape: CaptureShape, panel: Int?) {
         guard let source, let folder = capturesFolder,
               let pageIndex = pageIndexByURL[pageURL]
         else { return }
         let identity = ComicIdentity(fileURL: source)
         let pageNumber = pageIndex + 1
         let citation = identity.citation(pages: [pageNumber], panel: panel)
-        let kind: CaptureRecord.Kind = unitRect == nil ? .page : (panel == nil ? .region : .panel)
+
+        let kind: CaptureRecord.Kind
+        var region: CGRect?
+        var polygon: [CGPoint]?
+        switch shape {
+        case .page:
+            kind = .page
+        case .rect(let rect):
+            kind = panel == nil ? .region : .panel
+            region = rect
+        case .polygon(let points):
+            kind = panel == nil ? .shape : .panel
+            polygon = points
+            region = points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
+        }
         let record = CaptureRecord(
             kind: kind, series: identity.series, volume: identity.volume, chapter: identity.chapter,
-            pages: [pageNumber], panel: panel, region: unitRect, citation: citation,
+            pages: [pageNumber], panel: panel, region: region, polygon: polygon, citation: citation,
             source: source.lastPathComponent, file: ""
         )
         let writer = CaptureWriter(folder: folder)
@@ -399,13 +433,18 @@ final class ReaderModel {
         Task {
             let outcome = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
                 do {
-                    let image = try PageCropper.crop(pageURL, unitRect: unitRect)
+                    let image: CGImage
+                    switch shape {
+                    case .page: image = try PageCropper.crop(pageURL, unitRect: nil)
+                    case .rect(let rect): image = try PageCropper.crop(pageURL, unitRect: rect)
+                    case .polygon(let points): image = try PageCropper.crop(pageURL, polygon: points)
+                    }
                     let written = try writer.write(image, record: record)
                     // The whole page goes alongside, once, so the editor can
                     // reframe without ever opening the comic.
                     if kind != .page, !writer.hasPage(for: record) {
                         var page = record
-                        page.kind = .page; page.panel = nil; page.region = nil
+                        page.kind = .page; page.panel = nil; page.region = nil; page.polygon = nil
                         page.citation = identity.citation(pages: [pageNumber])
                         try writer.write(try PageCropper.crop(pageURL, unitRect: nil), record: page)
                     }
@@ -430,7 +469,7 @@ final class ReaderModel {
     /// The page or pages on screen, whole.
     func captureVisiblePages() {
         for page in visiblePages {
-            capture(page: page.url, unitRect: nil, panel: nil)
+            capture(page: page.url, shape: .page, panel: nil)
         }
     }
 

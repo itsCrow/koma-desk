@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import ComicArchive
+import PageCapture
 
 /// The reader's page canvas: the current spread with its neighbours parked just
 /// off-screen, so a page turn can be dragged across rather than swapped.
@@ -14,9 +15,12 @@ struct SpreadStrip: NSViewRepresentable {
     let highlights: [URL: [CGRect]]
     /// Capture mode: pages take clicks and drags as captures.
     let isCapturing: Bool
-    let panelsProvider: @MainActor (URL) async -> [CGRect]
-    /// A capture: page, unit rect (nil = whole page), panel number (nil = region).
-    let onCapture: (URL, CGRect?, Int?) -> Void
+    let captureTool: CaptureTool
+    let panelsProvider: @MainActor (URL) async -> [DetectedPanel]
+    /// A capture: page, shape, panel number (nil for a drawn shape or region).
+    let onCapture: (URL, CaptureShape, Int?) -> Void
+    /// Escape with nothing to cancel: leave capture mode.
+    let onEndCapture: () -> Void
     /// Called as the reader pans, zooms or swipes.
     let onInteraction: () -> Void
     /// A plain click on a page — not a drag, not a swipe.
@@ -29,7 +33,9 @@ struct SpreadStrip: NSViewRepresentable {
         strip.highlights = highlights
         strip.panelsProvider = panelsProvider
         strip.onCapture = onCapture
+        strip.onEndCapture = onEndCapture
         strip.isCapturing = isCapturing
+        strip.captureTool = captureTool
         strip.synchronise(with: model)
         return strip
     }
@@ -40,7 +46,9 @@ struct SpreadStrip: NSViewRepresentable {
         strip.highlights = highlights
         strip.panelsProvider = panelsProvider
         strip.onCapture = onCapture
+        strip.onEndCapture = onEndCapture
         strip.isCapturing = isCapturing
+        strip.captureTool = captureTool
         strip.synchronise(with: model)
     }
 }
@@ -50,12 +58,19 @@ struct SpreadStrip: NSViewRepresentable {
 final class SpreadStripView: NSView {
     var onInteraction: (() -> Void)?
     var onTap: (() -> Void)?
-    var panelsProvider: (@MainActor (URL) async -> [CGRect])?
-    var onCapture: ((URL, CGRect?, Int?) -> Void)?
+    var panelsProvider: (@MainActor (URL) async -> [DetectedPanel])?
+    var onCapture: ((URL, CaptureShape, Int?) -> Void)?
+    var onEndCapture: (() -> Void)?
     var isCapturing = false {
         didSet {
             guard isCapturing != oldValue else { return }
             for panel in [leftPanel, centrePanel, rightPanel] { panel?.setCapturing(isCapturing) }
+        }
+    }
+    var captureTool: CaptureTool = .panels {
+        didSet {
+            guard captureTool != oldValue else { return }
+            for panel in [leftPanel, centrePanel, rightPanel] { panel?.setCaptureTool(captureTool) }
         }
     }
     var highlights: [URL: [CGRect]] = [:] {
@@ -204,8 +219,10 @@ final class SpreadStripView: NSView {
         panel.setHighlights(highlights)
         panel.captureHandlers = (
             panels: { [weak self] url in await self?.panelsProvider?(url) ?? [] },
-            capture: { [weak self] url, rect, index in self?.onCapture?(url, rect, index) }
+            capture: { [weak self] url, shape, index in self?.onCapture?(url, shape, index) },
+            end: { [weak self] in self?.onEndCapture?() }
         )
+        panel.setCaptureTool(captureTool)
         panel.setCapturing(isCapturing)
         addSubview(panel)
 

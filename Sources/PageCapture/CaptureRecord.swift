@@ -6,7 +6,14 @@ import Foundation
 /// sheet, a Premiere sequence.
 public struct CaptureRecord: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, Sendable {
-        case panel, region, page
+        /// A detected panel, by click. Cropped to its outline when it isn't a rectangle.
+        case panel
+        /// A dragged rectangle.
+        case region
+        /// A drawn shape.
+        case shape
+        /// The whole page.
+        case page
     }
 
     public var kind: Kind
@@ -18,6 +25,9 @@ public struct CaptureRecord: Codable, Equatable, Sendable {
     public var panel: Int?
     /// Where on the page, as a unit rect with a top-left origin. Nil for a page.
     public var region: CGRect?
+    /// The exact outline, when the capture was masked to one. Everything
+    /// outside it is transparent in the file.
+    public var polygon: [CGPoint]?
     public var citation: String
     /// The comic file this came from.
     public var source: String
@@ -26,8 +36,8 @@ public struct CaptureRecord: Codable, Equatable, Sendable {
     public var date: Date
 
     public init(kind: Kind, series: String, volume: Int?, chapter: Int?, pages: [Int],
-                panel: Int?, region: CGRect?, citation: String, source: String, file: String,
-                date: Date = Date()) {
+                panel: Int?, region: CGRect?, polygon: [CGPoint]? = nil, citation: String,
+                source: String, file: String, date: Date = Date()) {
         self.kind = kind
         self.series = series
         self.volume = volume
@@ -35,6 +45,7 @@ public struct CaptureRecord: Codable, Equatable, Sendable {
         self.pages = pages
         self.panel = panel
         self.region = region
+        self.polygon = polygon
         self.citation = citation
         self.source = source
         self.file = file

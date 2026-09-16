@@ -6,8 +6,10 @@ import UniformTypeIdentifiers
 @testable import PageCapture
 import ComicArchive
 
-/// Draws a white page with black-bordered panels at the given unit rects.
-private func drawPage(width: Int = 700, height: Int = 1000, panels: [CGRect], bridge: CGRect? = nil) -> CGImage {
+/// Draws a white page with black-bordered panels at the given unit rects, and
+/// optionally black-bordered polygons (unit coords, top-left origin).
+private func drawPage(width: Int = 700, height: Int = 1000, panels: [CGRect], polygons: [[CGPoint]] = [],
+                      strokes: [CGRect] = [], bridge: CGRect? = nil) -> CGImage {
     let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpaceCreateDeviceGray(), bitmapInfo: 0)!
     context.setFillColor(gray: 1, alpha: 1)
@@ -22,6 +24,22 @@ private func drawPage(width: Int = 700, height: Int = 1000, panels: [CGRect], br
         // Some grey art inside, so the interior isn't bare paper.
         context.setFillColor(gray: 0.5, alpha: 1)
         context.fill(rect.insetBy(dx: rect.width * 0.2, dy: rect.height * 0.2))
+    }
+    for polygon in polygons {
+        let path = CGMutablePath()
+        path.addLines(between: polygon.map { CGPoint(x: $0.x * Double(width), y: (1 - $0.y) * Double(height)) })
+        path.closeSubpath()
+        context.addPath(path)
+        context.setFillColor(gray: 0.5, alpha: 1)
+        context.fillPath()
+        context.addPath(path)
+        context.strokePath()
+    }
+    // Thick strokes with nothing inside: a sound effect, not a panel.
+    for stroke in strokes {
+        context.setFillColor(gray: 0, alpha: 1)
+        context.fill(CGRect(x: stroke.minX * Double(width), y: (1 - stroke.maxY) * Double(height),
+                            width: stroke.width * Double(width), height: stroke.height * Double(height)))
     }
     if let bridge {
         // A thin line crossing a gutter, like a speech bubble's outline.
@@ -82,6 +100,53 @@ struct PanelDetectorTests {
         #expect(found.count == 1)
     }
 
+    @Test("A rectangle's outline is four corners and counts as rectangular")
+    func rectangleOutline() {
+        let rect = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.5)
+        let found = PanelDetector.detect(in: drawPage(panels: [rect]), rightToLeft: false)
+        #expect(found.count == 1)
+        let panel = found[0]
+        #expect(panel.isRectangular)
+        #expect(panel.outline.count >= 4 && panel.outline.count <= 8)
+        // Every outline point sits on the box's edge.
+        for p in panel.outline {
+            let onVertical = abs(p.x - panel.box.minX) < 0.01 || abs(p.x - panel.box.maxX) < 0.01
+            let onHorizontal = abs(p.y - panel.box.minY) < 0.01 || abs(p.y - panel.box.maxY) < 0.01
+            #expect(onVertical || onHorizontal)
+        }
+    }
+
+    @Test("A trapezoid keeps its slanted edge and is not rectangular")
+    func trapezoidOutline() {
+        // Wide at the top, narrow at the bottom: the classic diagonal gutter.
+        let trapezoid = [CGPoint(x: 0.1, y: 0.1), CGPoint(x: 0.9, y: 0.1), CGPoint(x: 0.7, y: 0.6), CGPoint(x: 0.3, y: 0.6)]
+        let found = PanelDetector.detect(in: drawPage(panels: [], polygons: [trapezoid]), rightToLeft: false)
+        #expect(found.count == 1)
+        let panel = found[0]
+        #expect(!panel.isRectangular)
+        #expect(panel.outline.count >= 4 && panel.outline.count <= 8)
+        // Shoelace area of the outline matches the trapezoid's, not its box's.
+        func area(_ pts: [CGPoint]) -> Double {
+            var sum = 0.0
+            for i in pts.indices { let j = (i + 1) % pts.count; sum += pts[i].x * pts[j].y - pts[j].x * pts[i].y }
+            return abs(sum) / 2
+        }
+        let expected = area(trapezoid), boxArea = panel.box.width * panel.box.height
+        #expect(abs(area(panel.outline) - expected) / expected < 0.06)
+        #expect(area(panel.outline) < boxArea * 0.85)
+    }
+
+    @Test("A stroke floating in the margin is not a panel")
+    func fragmentDropped() {
+        let panel = CGRect(x: 0.1, y: 0.5, width: 0.8, height: 0.4)
+        // A big L-shaped sound effect: large box, few pixels.
+        let strokes = [CGRect(x: 0.1, y: 0.05, width: 0.02, height: 0.35),
+                       CGRect(x: 0.1, y: 0.38, width: 0.5, height: 0.02)]
+        let found = PanelDetector.detect(in: drawPage(panels: [panel], strokes: strokes), rightToLeft: false)
+        #expect(found.count == 1)
+        #expect(close(found[0].box, panel))
+    }
+
     @Test("Berserk v01 page 119 has six panels, when the file is here")
     func realPage() throws {
         guard let path = ProcessInfo.processInfo.environment["PANELS_TEST_CBR"],
@@ -127,6 +192,40 @@ struct WriterTests {
         }
     }
 
+    @Test("A polygon crop is transparent outside the shape and opaque inside")
+    func polygonCrop() throws {
+        // A mid-grey page, so opaque pixels are unmistakable.
+        let context = CGContext(data: nil, width: 400, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 400, height: 600))
+        let page = context.makeImage()!
+
+        // A right triangle in the page's top-left quarter (unit, top-left origin).
+        let triangle = [CGPoint(x: 0.0, y: 0.0), CGPoint(x: 0.5, y: 0.0), CGPoint(x: 0.0, y: 0.5)]
+        let crop = try PageCropper.crop(page, polygon: triangle)
+        #expect(crop.width == 200 && crop.height == 300)
+
+        func alpha(atX x: Int, y: Int) -> UInt8 {
+            var px = [UInt8](repeating: 0, count: 4)
+            let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            // Draw the crop offset so pixel (x, y) — top-left origin — lands on the 1x1 context.
+            ctx.draw(crop, in: CGRect(x: -x, y: -(crop.height - 1 - y), width: crop.width, height: crop.height))
+            return px[3]
+        }
+        #expect(alpha(atX: 10, y: 10) == 255)      // inside, near the right angle
+        #expect(alpha(atX: 190, y: 290) == 0)     // the far corner, outside the hypotenuse
+        #expect(alpha(atX: 150, y: 20) == 255)    // inside, along the top
+        #expect(alpha(atX: 150, y: 150) == 0)     // just past the hypotenuse
+
+        #expect(throws: PageCropper.Failure.self) {
+            _ = try PageCropper.crop(page, polygon: [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 1)])
+        }
+    }
+
     @Test("Names follow the citation and never collide")
     func names() throws {
         let panel = CaptureRecord(kind: .panel, series: "Berserk", volume: 1, chapter: nil, pages: [117],
@@ -138,6 +237,9 @@ struct WriterTests {
         let odd = CaptureRecord(kind: .page, series: "What: Is/This?", volume: nil, chapter: nil, pages: [1],
                                 panel: nil, region: nil, citation: "", source: "", file: "")
         #expect(CaptureWriter.filename(for: odd) == "What- Is-This- p1 page.png")
+        let shape = CaptureRecord(kind: .shape, series: "Berserk", volume: 1, chapter: nil, pages: [117],
+                                  panel: nil, region: .zero, polygon: [.zero], citation: "", source: "", file: "")
+        #expect(CaptureWriter.filename(for: shape) == "Berserk v01 p117 shape.png")
     }
 
     @Test("Writing embeds the citation, records the manifest, and avoids overwriting")

@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import VisionKit
+import PageCapture
 
 // MARK: - Scroll view
 
@@ -19,8 +20,9 @@ final class SpreadScrollView: NSScrollView {
     weak var swipeCoordinator: SpreadStripView?
 
     typealias CaptureHandlers = (
-        panels: @MainActor (URL) async -> [CGRect],
-        capture: (URL, CGRect?, Int?) -> Void
+        panels: @MainActor (URL) async -> [DetectedPanel],
+        capture: (URL, CaptureShape, Int?) -> Void,
+        end: () -> Void
     )
     var captureHandlers: CaptureHandlers? {
         didSet { pageView.captureHandlers = captureHandlers }
@@ -30,6 +32,10 @@ final class SpreadScrollView: NSScrollView {
     func setCapturing(_ capturing: Bool) {
         isCapturing = capturing
         pageView.setCapturing(capturing)
+    }
+
+    func setCaptureTool(_ tool: CaptureTool) {
+        pageView.setCaptureTool(tool)
     }
 
     private let pageView = SpreadDocumentView()
@@ -253,6 +259,7 @@ private final class SpreadDocumentView: NSView {
     private var captureViews: [CaptureOverlayView] = []
     private var pageURLs: [URL] = []
     private var isCapturing = false
+    private var captureTool: CaptureTool = .panels
     var captureHandlers: SpreadScrollView.CaptureHandlers? {
         didSet { captureViews.forEach { $0.handlers = captureHandlers } }
     }
@@ -302,6 +309,7 @@ private final class SpreadDocumentView: NSView {
             let overlay = CaptureOverlayView()
             overlay.pageURL = urls.indices.contains(index) ? urls[index] : nil
             overlay.handlers = captureHandlers
+            overlay.tool = captureTool
             addSubview(overlay)
             return overlay
         }
@@ -327,6 +335,11 @@ private final class SpreadDocumentView: NSView {
     func setCapturing(_ capturing: Bool) {
         isCapturing = capturing
         captureViews.forEach { $0.isActive = capturing }
+    }
+
+    func setCaptureTool(_ tool: CaptureTool) {
+        captureTool = tool
+        captureViews.forEach { $0.tool = tool }
     }
 
     /// Boxes per page, aligned with `images`. Kept if the pages haven't been
@@ -392,10 +405,14 @@ final class LiveTextAnalyses: @unchecked Sendable {
     }
 }
 
-/// Capture mode on one page: shows the detected panels, tints the one under
-/// the mouse, and turns a click into a panel capture or a drag into a region
-/// capture. Inert — invisible and untouchable — when not active, so Live Text
-/// and paging behave as usual.
+/// Capture mode on one page.
+///
+/// With the Panels tool it shows the detected panels along their real
+/// outlines, tints the one under the mouse, and captures it on click. With the
+/// Draw tool a drag captures a rectangle and clicks place the corners of a
+/// shape, closed by clicking the first corner again or pressing Return.
+/// Inert — invisible and untouchable — when not active, so Live Text and paging
+/// behave as usual.
 private final class CaptureOverlayView: NSView {
     var pageURL: URL?
     var handlers: SpreadScrollView.CaptureHandlers?
@@ -403,22 +420,40 @@ private final class CaptureOverlayView: NSView {
     var isActive = false {
         didSet {
             guard isActive != oldValue else { return }
-            hovered = nil
-            marquee = nil
+            reset()
             if isActive { detectPanels() } else { detection?.cancel() }
             window?.invalidateCursorRects(for: self)
             needsDisplay = true
         }
     }
 
-    private var panels: [CGRect] = []
+    var tool: CaptureTool = .panels {
+        didSet {
+            guard tool != oldValue else { return }
+            reset()
+            needsDisplay = true
+        }
+    }
+
+    private var panels: [DetectedPanel] = []
+    private var panelPaths: [NSBezierPath] = []
     private var detection: Task<Void, Never>?
     private var hovered: Int?
     private var dragStart: NSPoint?
     private var marquee: NSRect?
+    /// Corners placed so far, in view coordinates.
+    private var lasso: [NSPoint] = []
+    private var mouseAt: NSPoint?
     private var tracking: NSTrackingArea?
+    private weak var previousResponder: NSResponder?
+
+    /// How close to the first corner a click has to land to close the shape.
+    private let closeRadius: CGFloat = 8
 
     override var isFlipped: Bool { true }
+
+    /// Only while a shape is being drawn: Return, Delete and Escape belong to it.
+    override var acceptsFirstResponder: Bool { isActive && !lasso.isEmpty }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         isActive && bounds.contains(convert(point, from: superview)) ? self : nil
@@ -436,6 +471,18 @@ private final class CaptureOverlayView: NSView {
         tracking = area
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        rebuildPaths()
+    }
+
+    private func reset() {
+        hovered = nil
+        dragStart = nil
+        marquee = nil
+        cancelLasso()
+    }
+
     private func detectPanels() {
         detection?.cancel()
         guard let pageURL, let handlers else { return }
@@ -443,7 +490,23 @@ private final class CaptureOverlayView: NSView {
             let found = await handlers.panels(pageURL)
             guard let self, !Task.isCancelled, self.isActive else { return }
             self.panels = found
+            self.rebuildPaths()
             self.needsDisplay = true
+        }
+    }
+
+    /// The outlines in view coordinates, for drawing and for hit-testing.
+    private func rebuildPaths() {
+        let size = bounds.size
+        panelPaths = panels.map { panel in
+            let path = NSBezierPath()
+            let points = panel.outline.map { NSPoint(x: $0.x * size.width, y: $0.y * size.height) }
+            if let first = points.first {
+                path.move(to: first)
+                for point in points.dropFirst() { path.line(to: point) }
+                path.close()
+            }
+            return path
         }
     }
 
@@ -453,11 +516,22 @@ private final class CaptureOverlayView: NSView {
         CGPoint(x: point.x / bounds.width, y: point.y / bounds.height)
     }
 
+    private func panelIndex(at point: NSPoint) -> Int? {
+        panelPaths.firstIndex { $0.contains(point) }
+    }
+
     override func mouseMoved(with event: NSEvent) {
-        guard isActive, dragStart == nil else { return }
-        let p = unit(convert(event.locationInWindow, from: nil))
-        let index = panels.firstIndex { $0.contains(p) }
-        if index != hovered { hovered = index; needsDisplay = true }
+        guard isActive else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        switch tool {
+        case .panels:
+            guard dragStart == nil else { return }
+            let index = panelIndex(at: point)
+            if index != hovered { hovered = index; needsDisplay = true }
+        case .draw:
+            mouseAt = point
+            if !lasso.isEmpty { needsDisplay = true }
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -471,7 +545,7 @@ private final class CaptureOverlayView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard isActive, let start = dragStart else { return }
+        guard isActive, tool == .draw, lasso.isEmpty, let start = dragStart else { return }
         let now = convert(event.locationInWindow, from: nil)
         marquee = NSRect(x: min(start.x, now.x), y: min(start.y, now.y),
                          width: abs(now.x - start.x), height: abs(now.y - start.y))
@@ -481,18 +555,77 @@ private final class CaptureOverlayView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         guard isActive, let start = dragStart, let pageURL else { return }
-        defer { dragStart = nil; marquee = nil; needsDisplay = true }
+        defer { dragStart = nil; needsDisplay = true }
         let end = convert(event.locationInWindow, from: nil)
+        let travelled = hypot(end.x - start.x, end.y - start.y)
 
-        if hypot(end.x - start.x, end.y - start.y) < 4 {
-            // A click: the panel under it, if there is one.
-            let p = unit(end)
-            guard let index = panels.firstIndex(where: { $0.contains(p) }) else { return }
-            handlers?.capture(pageURL, panels[index], index + 1)
-        } else if let marquee, marquee.width > 8, marquee.height > 8 {
-            let rect = CGRect(x: marquee.minX / bounds.width, y: marquee.minY / bounds.height,
-                              width: marquee.width / bounds.width, height: marquee.height / bounds.height)
-            handlers?.capture(pageURL, rect, nil)
+        switch tool {
+        case .panels:
+            guard travelled < 4, let index = panelIndex(at: end) else { return }
+            let panel = panels[index]
+            // A rectangle stays a rectangle: opaque, and smaller on disk.
+            let shape: CaptureShape = panel.isRectangular ? .rect(panel.box) : .polygon(panel.outline)
+            handlers?.capture(pageURL, shape, index + 1)
+
+        case .draw:
+            if !lasso.isEmpty {
+                // Another corner — or the first one again, which closes the shape.
+                if let first = lasso.first, lasso.count >= 3, hypot(end.x - first.x, end.y - first.y) <= closeRadius {
+                    closeLasso()
+                } else {
+                    lasso.append(end)
+                }
+            } else if travelled >= 4 {
+                defer { marquee = nil }
+                guard let marquee, marquee.width > 8, marquee.height > 8 else { return }
+                let rect = CGRect(x: marquee.minX / bounds.width, y: marquee.minY / bounds.height,
+                                  width: marquee.width / bounds.width, height: marquee.height / bounds.height)
+                handlers?.capture(pageURL, .rect(rect), nil)
+            } else {
+                // First corner. Take the keyboard for the rest of the shape.
+                lasso = [end]
+                mouseAt = end
+                previousResponder = window?.firstResponder
+                window?.makeFirstResponder(self)
+            }
+        }
+    }
+
+    // MARK: Lasso
+
+    private func closeLasso() {
+        defer { cancelLasso() }
+        guard lasso.count >= 3, let pageURL else { return }
+        let points = lasso.map(unit)
+        handlers?.capture(pageURL, .polygon(points), nil)
+    }
+
+    private func cancelLasso() {
+        guard !lasso.isEmpty else { return }
+        lasso = []
+        mouseAt = nil
+        if window?.firstResponder === self {
+            window?.makeFirstResponder(previousResponder)
+        }
+        previousResponder = nil
+        needsDisplay = true
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard isActive else { return super.keyDown(with: event) }
+        switch event.keyCode {
+        case 36, 76:  // Return, Enter
+            closeLasso()
+        case 51, 117:  // Delete, Forward Delete
+            if !lasso.isEmpty {
+                lasso.removeLast()
+                if lasso.isEmpty { cancelLasso() }
+                needsDisplay = true
+            }
+        case 53:  // Escape
+            if lasso.isEmpty { handlers?.end() } else { cancelLasso() }
+        default:
+            super.keyDown(with: event)
         }
     }
 
@@ -501,34 +634,72 @@ private final class CaptureOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard isActive else { return }
         let size = bounds.size
-        func rect(_ unit: CGRect) -> NSRect {
-            NSRect(x: unit.minX * size.width, y: unit.minY * size.height,
-                   width: unit.width * size.width, height: unit.height * size.height)
-        }
         let accent = NSColor.controlAccentColor
         let line = max(size.height * 0.0015, 1)
 
-        for (index, panel) in panels.enumerated() {
-            let path = NSBezierPath(rect: rect(panel))
-            path.lineWidth = line
-            if index == hovered {
-                accent.withAlphaComponent(0.22).setFill()
-                path.fill()
-                accent.setStroke()
-                path.lineWidth = line * 2
-            } else {
-                accent.withAlphaComponent(0.55).setStroke()
+        switch tool {
+        case .panels:
+            for (index, path) in panelPaths.enumerated() {
+                path.lineWidth = line
+                if index == hovered {
+                    accent.withAlphaComponent(0.22).setFill()
+                    path.fill()
+                    accent.setStroke()
+                    path.lineWidth = line * 2
+                } else {
+                    accent.withAlphaComponent(0.55).setStroke()
+                }
+                path.stroke()
             }
-            path.stroke()
-        }
 
-        if let marquee {
-            let path = NSBezierPath(rect: marquee)
-            NSColor.white.withAlphaComponent(0.18).setFill()
-            path.fill()
+        case .draw:
+            if let marquee {
+                let path = NSBezierPath(rect: marquee)
+                NSColor.white.withAlphaComponent(0.18).setFill()
+                path.fill()
+                NSColor.white.setStroke()
+                path.lineWidth = line * 2
+                path.stroke()
+            }
+            guard let first = lasso.first else { return }
+            let path = NSBezierPath()
+            path.move(to: first)
+            for point in lasso.dropFirst() { path.line(to: point) }
+            if lasso.count >= 3 {
+                // A preview of the closing edge.
+                let closing = NSBezierPath()
+                closing.move(to: lasso[lasso.count - 1])
+                closing.line(to: first)
+                closing.setLineDash([line * 4, line * 4], count: 2, phase: 0)
+                closing.lineWidth = line * 1.5
+                NSColor.white.withAlphaComponent(0.5).setStroke()
+                closing.stroke()
+            }
+            if let mouseAt {
+                let rubber = NSBezierPath()
+                rubber.move(to: lasso[lasso.count - 1])
+                rubber.line(to: mouseAt)
+                rubber.lineWidth = line * 1.5
+                NSColor.white.withAlphaComponent(0.7).setStroke()
+                rubber.stroke()
+            }
             NSColor.white.setStroke()
             path.lineWidth = line * 2
             path.stroke()
+            // Corners, with the first one ringed: click it to close.
+            let dot = max(line * 3, 3)
+            for (index, point) in lasso.enumerated() {
+                let ring = NSBezierPath(ovalIn: NSRect(x: point.x - dot, y: point.y - dot, width: dot * 2, height: dot * 2))
+                (index == 0 ? accent : NSColor.white).setFill()
+                ring.fill()
+            }
+            if lasso.count >= 3 {
+                let target = NSBezierPath(ovalIn: NSRect(x: first.x - closeRadius, y: first.y - closeRadius,
+                                                         width: closeRadius * 2, height: closeRadius * 2))
+                accent.withAlphaComponent(0.8).setStroke()
+                target.lineWidth = line
+                target.stroke()
+            }
         }
     }
 }
