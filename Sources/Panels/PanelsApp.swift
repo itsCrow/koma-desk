@@ -162,7 +162,15 @@ struct WindowConfigurator: NSViewRepresentable {
     /// only has the right shape if the height allows for that strip — which
     /// isn't a fixed ratio.
     final class Coordinator: NSObject, NSWindowDelegate {
-        weak var forwardTo: NSWindowDelegate?
+        /// SwiftUI's own delegate, which everything but resizing goes to.
+        ///
+        /// Held strongly on purpose. NSWindow caches which delegate methods
+        /// exist at the moment the delegate is set; if SwiftUI's object were
+        /// allowed to go away while this one still claimed its methods, the
+        /// forward would land nowhere and AppKit would throw
+        /// "unrecognized selector" on the next resize — which is exactly what
+        /// crashed the app when a new project made the script pane appear.
+        var forwardTo: NSWindowDelegate?
         var aspect: CGFloat?
         /// Height of the chrome inside the content view, above the pages.
         var chromeInset: CGFloat = 0
@@ -181,6 +189,25 @@ struct WindowConfigurator: NSViewRepresentable {
         override func forwardingTarget(for selector: Selector!) -> Any? {
             forwardTo?.responds(to: selector) == true ? forwardTo : nil
         }
+
+        // The callbacks a resize actually produces, implemented outright so
+        // they never depend on forwarding.
+        func windowDidResize(_ notification: Notification) { forwardTo?.windowDidResize?(notification) }
+        func windowWillStartLiveResize(_ notification: Notification) { forwardTo?.windowWillStartLiveResize?(notification) }
+        func windowDidEndLiveResize(_ notification: Notification) { forwardTo?.windowDidEndLiveResize?(notification) }
+        func windowDidMove(_ notification: Notification) { forwardTo?.windowDidMove?(notification) }
+        func windowDidBecomeKey(_ notification: Notification) { forwardTo?.windowDidBecomeKey?(notification) }
+        func windowDidResignKey(_ notification: Notification) { forwardTo?.windowDidResignKey?(notification) }
+        func windowDidBecomeMain(_ notification: Notification) { forwardTo?.windowDidBecomeMain?(notification) }
+        func windowDidResignMain(_ notification: Notification) { forwardTo?.windowDidResignMain?(notification) }
+        func windowDidChangeScreen(_ notification: Notification) { forwardTo?.windowDidChangeScreen?(notification) }
+        func windowDidChangeOcclusionState(_ notification: Notification) { forwardTo?.windowDidChangeOcclusionState?(notification) }
+        func windowWillEnterFullScreen(_ notification: Notification) { forwardTo?.windowWillEnterFullScreen?(notification) }
+        func windowDidEnterFullScreen(_ notification: Notification) { forwardTo?.windowDidEnterFullScreen?(notification) }
+        func windowWillExitFullScreen(_ notification: Notification) { forwardTo?.windowWillExitFullScreen?(notification) }
+        func windowDidExitFullScreen(_ notification: Notification) { forwardTo?.windowDidExitFullScreen?(notification) }
+        func windowWillClose(_ notification: Notification) { forwardTo?.windowWillClose?(notification) }
+        func windowShouldClose(_ sender: NSWindow) -> Bool { forwardTo?.windowShouldClose?(sender) ?? true }
 
         func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
             guard let aspect, !sender.styleMask.contains(.fullScreen) else {
@@ -256,7 +283,9 @@ struct WindowConfigurator: NSViewRepresentable {
         coordinator.appliedLayoutKey = layoutKey
 
         if window.delegate !== coordinator {
-            coordinator.forwardTo = window.delegate
+            // SwiftUI installed a delegate of its own since we last looked:
+            // that's the one to forward to now.
+            if let current = window.delegate { coordinator.forwardTo = current }
             window.delegate = coordinator
         }
         let previousSide = coordinator.sideInset
