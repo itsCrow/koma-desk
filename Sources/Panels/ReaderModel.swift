@@ -729,7 +729,7 @@ final class ReaderModel {
         let writer = CaptureWriter(folder: folder)
 
         Task {
-            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
+            let outcome = await Task.detached(priority: .userInitiated) { () -> Result<WriteResult, Error> in
                 do {
                     let image: CGImage
                     switch shape {
@@ -739,19 +739,22 @@ final class ReaderModel {
                     }
                     // Only what was asked for: a drawn shape saves the shape.
                     // The whole page is its own command when it's wanted.
-                    let written = try writer.write(image, record: record)
-                    return .success(written.file)
+                    return .success(try writer.write(image, record: record))
                 } catch {
                     return .failure(error)
                 }
             }.value
 
             switch outcome {
-            case .success(let file):
+            case .success(let written):
+                let file = written.record.file
                 let pasteboard = NSPasteboard.general
                 pasteboard.clearContents()
                 pasteboard.setString(citation, forType: .string)
-                lastCaptureMessage = project == nil ? "Saved \(file) · citation copied" : "Saved \(file) · cited in script"
+                let verb = written.reused ? "Already saved as" : "Saved"
+                lastCaptureMessage = project == nil
+                    ? "\(verb) \(file) · citation copied"
+                    : "\(verb) \(file) · cited in script"
                 recordCitation(comicURL: source, pageIndex: pageIndex, pageNumbers: [pageNumber], panel: panel,
                                polygon: polygon, region: region, captureFile: file, text: citation)
             case .failure(let error):

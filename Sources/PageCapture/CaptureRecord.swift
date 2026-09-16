@@ -35,6 +35,26 @@ public struct CaptureRecord: Codable, Equatable, Sendable {
     public var file: String
     public var date: Date
 
+    /// Whether these two describe the same picture: the same region of the
+    /// same page of the same comic. Not the date, the filename or the citation
+    /// text, which all follow from the rest.
+    ///
+    /// Geometry is what separates a genuine duplicate from a coincidence of
+    /// naming: two different shapes drawn on one page want the same filename
+    /// but are different pictures, while a page saved twice has no geometry
+    /// either time and is the same picture.
+    public func isSameShot(as other: CaptureRecord) -> Bool {
+        kind == other.kind
+            && source == other.source
+            && series == other.series
+            && volume == other.volume
+            && chapter == other.chapter
+            && pages == other.pages
+            && panel == other.panel
+            && region == other.region
+            && polygon == other.polygon
+    }
+
     public init(kind: Kind, series: String, volume: Int?, chapter: Int?, pages: [Int],
                 panel: Int?, region: CGRect?, polygon: [CGPoint]? = nil, citation: String,
                 source: String, file: String, date: Date = Date()) {

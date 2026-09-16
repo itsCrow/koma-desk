@@ -3,6 +3,7 @@ import Foundation
 import CoreGraphics
 @testable import Panels
 import PanelsProject
+import PageCapture
 
 /// The reader and a project together, driven the way the menus drive them.
 /// Needs a real comic: set PANELS_TEST_CBR.
@@ -128,6 +129,40 @@ struct ReaderProjectTests {
         #expect(left == ["kept.png"])
         #expect(project.manifest.citations.map(\.id) == [kept.id])
         #expect(project.unusedCaptureFiles.isEmpty)
+    }
+
+    @Test("Cleaning up leaves the writer's manifest describing what's really there")
+    func cleanUpPrunesWriterManifest() throws {
+        let projectURL = try Self.scratchProject()
+        defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+        let project = try Project.open(projectURL)
+        let comic = ComicRef(title: "B", path: "/x/b.cbz", filename: "b.cbz", fileSize: 1)
+        project.manifest.comics = [comic]
+
+        // Two captures written properly, so captures.json knows them both.
+        let writer = CaptureWriter(folder: project.capturesFolder)
+        let context = CGContext(data: nil, width: 20, height: 20, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: 0)!
+        let image = context.makeImage()!
+        func record(_ page: Int) -> CaptureRecord {
+            CaptureRecord(kind: .page, series: "B", volume: 1, chapter: nil, pages: [page], panel: nil,
+                          region: nil, citation: "p\(page)", source: "b.cbz", file: "")
+        }
+        let keptFile = try writer.write(image, record: record(1)).record.file
+        let droppedFile = try writer.write(image, record: record(2)).record.file
+        #expect(writer.loadManifest().count == 2)
+
+        let cited = Citation(comicID: comic.id, pageIndex: 0, pageNumbers: [1], captureFile: keptFile, text: "kept")
+        project.manifest.citations = [cited]
+        project.script = "Only [kept](panels://cite/\(cited.id))."
+
+        project.cleanUpUnusedCaptures()
+
+        let onDisk = try FileManager.default.contentsOfDirectory(atPath: project.capturesFolder.path)
+            .filter { $0.hasSuffix(".png") }
+        #expect(onDisk == [keptFile])
+        #expect(writer.loadManifest().map(\.file) == [keptFile])
+        #expect(!writer.loadManifest().contains { $0.file == droppedFile })
     }
 
     @Test("Removing one citation trashes its capture, but not one still cited")

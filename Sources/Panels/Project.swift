@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import PanelsProject
+import PageCapture
 
 /// The open project: the script, its citations, and where they point. Saves
 /// itself a second after the last change, and on close.
@@ -178,6 +179,9 @@ final class Project {
         }
         let used = Set(ScriptMarkdown.citationIDs(in: script))
         manifest.citations.removeAll { !used.contains($0.id) }
+        // The writer keeps its own manifest of everything it ever wrote; it
+        // should describe what the folder now holds.
+        CaptureWriter(folder: capturesFolder).pruneMissingRecords()
         return (trashed, bytes)
     }
 

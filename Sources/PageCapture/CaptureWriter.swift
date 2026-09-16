@@ -4,6 +4,14 @@ import UniformTypeIdentifiers
 
 /// Writes captures to the editor's folder: a PNG carrying its citation, and a
 /// line in the manifest.
+/// What came of a write: the record as stored, and whether it was already
+/// there.
+public struct WriteResult: Sendable {
+    public let record: CaptureRecord
+    /// True when an identical capture existed and was reused, nothing written.
+    public let reused: Bool
+}
+
 public struct CaptureWriter: Sendable {
     public let folder: URL
 
@@ -14,10 +22,16 @@ public struct CaptureWriter: Sendable {
     public var manifestURL: URL { folder.appendingPathComponent("captures.json") }
 
     /// Writes `image` as PNG under a name built from the record, embedding the
-    /// citation in the file, and appends the record (with the final filename)
-    /// to the manifest. Returns the record as written.
+    /// citation in the file, and appends the record to the manifest.
+    ///
+    /// The same picture is never written twice: if an identical capture is
+    /// already in the manifest and its file is still on disk, that one is
+    /// handed back untouched.
     @discardableResult
-    public func write(_ image: CGImage, record: CaptureRecord) throws -> CaptureRecord {
+    public func write(_ image: CGImage, record: CaptureRecord) throws -> WriteResult {
+        if let existing = existingCapture(matching: record) {
+            return WriteResult(record: existing, reused: true)
+        }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = availableURL(for: Self.filename(for: record))
         var written = record
@@ -37,7 +51,31 @@ public struct CaptureWriter: Sendable {
         guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
 
         try append(written)
-        return written
+        return WriteResult(record: written, reused: false)
+    }
+
+    /// An identical capture already on disk, if there is one. The file has to
+    /// still exist: a cleanup can leave the manifest naming things that are
+    /// gone, and handing one of those back would point at nothing.
+    public func existingCapture(matching record: CaptureRecord) -> CaptureRecord? {
+        loadManifest().first {
+            $0.isSameShot(as: record)
+                && !$0.file.isEmpty
+                && FileManager.default.fileExists(atPath: folder.appendingPathComponent($0.file).path)
+        }
+    }
+
+    /// Drops records whose file is no longer there, so the manifest describes
+    /// what the folder actually holds.
+    @discardableResult
+    public func pruneMissingRecords() -> Int {
+        let records = loadManifest()
+        let kept = records.filter {
+            !$0.file.isEmpty && FileManager.default.fileExists(atPath: folder.appendingPathComponent($0.file).path)
+        }
+        guard kept.count != records.count else { return 0 }
+        try? JSONEncoder.manifest.encode(kept).write(to: manifestURL, options: .atomic)
+        return records.count - kept.count
     }
 
     /// Whether the whole page for this citation has already been saved, so it

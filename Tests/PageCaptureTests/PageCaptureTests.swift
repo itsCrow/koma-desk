@@ -253,24 +253,82 @@ struct WriterTests {
                                    citation: "Berserk, Vol. 1, p. 117, panel 3", source: "Berserk v01.cbz", file: "")
 
         let first = try writer.write(image, record: record)
+        // The same shot again is the same picture: reused, not written twice.
         let second = try writer.write(image, record: record)
-        #expect(first.file == "Berserk v01 p117 panel3.png")
-        #expect(second.file == "Berserk v01 p117 panel3-2.png")
+        #expect(first.record.file == "Berserk v01 p117 panel3.png")
+        #expect(!first.reused)
+        #expect(second.record.file == first.record.file)
+        #expect(second.reused)
 
-        let url = writer.folder.appendingPathComponent(first.file)
+        let url = writer.folder.appendingPathComponent(first.record.file)
         let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         let png = properties?[kCGImagePropertyPNGDictionary] as? [CFString: Any]
         #expect(png?[kCGImagePropertyPNGDescription] as? String == "Berserk, Vol. 1, p. 117, panel 3")
 
         let manifest = writer.loadManifest()
-        #expect(manifest.count == 2)
-        #expect(manifest.map(\.file) == [first.file, second.file])
+        #expect(manifest.count == 1)
+        #expect(manifest.map(\.file) == [first.record.file])
         #expect(manifest[0].citation == record.citation)
 
         #expect(!writer.hasPage(for: record))
         var page = record; page.kind = .page; page.panel = nil; page.region = nil
         try writer.write(image, record: page)
         #expect(writer.hasPage(for: record))
+    }
+
+    @Test("Different shapes on one page are different pictures, and both are kept")
+    func differentShapesSamePage() throws {
+        let dir = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let writer = CaptureWriter(folder: dir)
+        let image = drawPage(width: 60, height: 60, panels: [])
+
+        func shape(_ points: [CGPoint]) -> CaptureRecord {
+            CaptureRecord(kind: .shape, series: "Berserk", volume: 1, chapter: nil, pages: [204],
+                          panel: nil, region: .zero, polygon: points, citation: "c", source: "b.cbz", file: "")
+        }
+        let one = try writer.write(image, record: shape([.zero, CGPoint(x: 1, y: 0), CGPoint(x: 0, y: 1)]))
+        let two = try writer.write(image, record: shape([.zero, CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1)]))
+        #expect(!one.reused && !two.reused)
+        #expect(one.record.file != two.record.file)
+        #expect(writer.loadManifest().count == 2)
+    }
+
+    @Test("A record whose file has gone is written afresh, not handed back")
+    func staleRecordNotReused() throws {
+        let dir = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let writer = CaptureWriter(folder: dir)
+        let image = drawPage(width: 40, height: 40, panels: [])
+        let record = CaptureRecord(kind: .page, series: "Berserk", volume: 1, chapter: nil, pages: [9],
+                                   panel: nil, region: nil, citation: "c", source: "b.cbz", file: "")
+
+        let first = try writer.write(image, record: record)
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(first.record.file))
+        #expect(writer.existingCapture(matching: record) == nil)
+
+        let again = try writer.write(image, record: record)
+        #expect(!again.reused)
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent(again.record.file).path))
+    }
+
+    @Test("Pruning drops records whose file has gone and keeps the rest")
+    func prune() throws {
+        let dir = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let writer = CaptureWriter(folder: dir)
+        let image = drawPage(width: 30, height: 30, panels: [])
+        func page(_ number: Int) -> CaptureRecord {
+            CaptureRecord(kind: .page, series: "B", volume: 1, chapter: nil, pages: [number],
+                          panel: nil, region: nil, citation: "c", source: "b.cbz", file: "")
+        }
+        let kept = try writer.write(image, record: page(1))
+        let gone = try writer.write(image, record: page(2))
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(gone.record.file))
+
+        #expect(writer.pruneMissingRecords() == 1)
+        #expect(writer.loadManifest().map(\.file) == [kept.record.file])
+        #expect(writer.pruneMissingRecords() == 0)
     }
 }
