@@ -30,6 +30,7 @@ struct ScriptEditorView: NSViewRepresentable {
         textView.markdown = { [weak coordinator] range in coordinator?.markdown(of: range) ?? "" }
         textView.attributedString = { [weak coordinator] markdown in coordinator?.render(markdown) ?? NSAttributedString() }
         textView.delegate = context.coordinator
+        textView.updateDragTypeRegistration()
         textView.isRichText = true
         textView.allowsUndo = true
         textView.usesFontPanel = false
@@ -320,6 +321,13 @@ final class ScriptTextView: NSTextView {
         [Self.markdownType] + super.readablePasteboardTypes
     }
 
+    /// A drop is restricted to these — AppKit's own fixed list, which does not
+    /// grow from `readablePasteboardTypes`. Without this the Markdown is on
+    /// the pasteboard but never chosen, RTF is, and a chip's RTF is its URL.
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        [Self.markdownType] + super.acceptableDragTypes
+    }
+
     override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         if type == Self.markdownType, let markdown = markdown?(selectedRange()) {
             pboard.setString(markdown, forType: type)
@@ -329,7 +337,9 @@ final class ScriptTextView: NSTextView {
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        if type == Self.markdownType, let markdown = pboard.string(forType: type),
+        // Whatever type AppKit settled on, the Markdown is the faithful one
+        // when it's there.
+        if let markdown = pboard.string(forType: Self.markdownType),
            let piece = attributedString?(markdown) {
             let range = rangeForUserTextChange
             guard range.location != NSNotFound, shouldChangeText(in: range, replacementString: piece.string) else { return false }
