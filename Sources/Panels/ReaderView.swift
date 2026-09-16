@@ -17,16 +17,19 @@ struct ReaderView: View {
         Group {
             if let project = model.project, model.showsScript {
                 HSplitView {
+                    // Extra width goes to the pages; the pane keeps its size.
                     pageArea
                         .frame(minWidth: 480)
+                        .layoutPriority(1)
                     ScriptEditorView(project: project, model: model)
-                        .frame(minWidth: 280, idealWidth: 420, maxWidth: 700)
+                        .frame(minWidth: 360, idealWidth: 420, maxWidth: 700)
                 }
             } else {
                 pageArea
             }
         }
-        .frame(minWidth: 640, minHeight: 480)
+        // Height follows from the spread's shape; only the width needs a floor.
+        .frame(minWidth: 640, minHeight: 300)
         .navigationTitle(model.title ?? "Panels")
         .focusable()
         .focusEffectDisabled()

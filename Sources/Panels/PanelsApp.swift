@@ -115,6 +115,9 @@ struct WindowConfigurator: NSViewRepresentable {
     /// shown or hidden — so the window is re-shaped.
     let layoutKey: String
 
+    /// The pages never get squeezed below this by a pane.
+    static let minimumPageWidth: CGFloat = 640
+
     /// Stands in front of SwiftUI's own window delegate, forwarding everything
     /// except resizing, which it constrains to the comic's shape.
     ///
@@ -212,6 +215,7 @@ struct WindowConfigurator: NSViewRepresentable {
     /// rather than uncovering black.
     private func shape(_ window: NSWindow, from view: NSView, _ coordinator: Coordinator) {
         guard coordinator.appliedAspect != spreadAspect || coordinator.appliedLayoutKey != layoutKey else { return }
+        let layoutChanged = coordinator.appliedLayoutKey != layoutKey && !coordinator.appliedLayoutKey.isEmpty
         coordinator.appliedAspect = spreadAspect
         coordinator.appliedLayoutKey = layoutKey
 
@@ -219,13 +223,27 @@ struct WindowConfigurator: NSViewRepresentable {
             coordinator.forwardTo = window.delegate
             window.delegate = coordinator
         }
+        let previousSide = coordinator.sideInset
         measure(window, from: view, coordinator)
         coordinator.aspect = spreadAspect
 
         guard let aspect = spreadAspect, aspect > 0,
               !window.styleMask.contains(.fullScreen) else { return }
+        // A pane appearing takes its width from the pages until the window
+        // grows to make room; a pane going away leaves the pages that room.
+        // Either way the pages keep the size they had. On the first pass the
+        // saved frame may date from a session without the pane, so the pages
+        // are only guaranteed the reader's own minimum width.
+        let content = window.contentRect(forFrameRect: window.frame)
+        let widthDelta: CGFloat
+        if layoutChanged {
+            widthDelta = coordinator.sideInset - previousSide
+        } else {
+            widthDelta = max(0, Self.minimumPageWidth - (content.width - coordinator.sideInset))
+        }
         coordinator.isReshaping = true
-        window.setFrame(frame(for: window, aspect: aspect, coordinator), display: true, animate: true)
+        window.setFrame(frame(for: window, width: window.frame.width + widthDelta, aspect: aspect, coordinator),
+                        display: true, animate: true)
         coordinator.isReshaping = false
     }
 
@@ -247,15 +265,16 @@ struct WindowConfigurator: NSViewRepresentable {
 
     /// The window's current width, at the spread's shape, kept on screen and
     /// anchored at its top-left so it doesn't wander.
-    private func frame(for window: NSWindow, aspect: CGFloat, _ coordinator: Coordinator) -> NSRect {
+    private func frame(for window: NSWindow, width: CGFloat, aspect: CGFloat, _ coordinator: Coordinator) -> NSRect {
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame
-        var size = coordinator.shaped(window.frame.size, for: window, aspect: aspect)
+        var width = width
+        if let visible { width = min(width, visible.width) }
+        var size = coordinator.shaped(NSSize(width: width, height: window.frame.height), for: window, aspect: aspect)
         if let visible, size.height > visible.height {
             // Too tall for the screen: find the width whose shaped height fits.
             let overflow = size.height - visible.height
-            let content = window.contentRect(forFrameRect: window.frame)
             size = coordinator.shaped(
-                NSSize(width: window.frame.width - overflow * aspect, height: content.height),
+                NSSize(width: width - overflow * aspect, height: window.frame.height),
                 for: window, aspect: aspect
             )
         }
