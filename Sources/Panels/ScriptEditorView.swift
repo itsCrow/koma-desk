@@ -465,8 +465,7 @@ struct ScriptEditorView: NSViewRepresentable {
                 popover.appearance = NSAppearance(named: .darkAqua)
                 popover.contentViewController = NSHostingController(
                     rootView: SpanPreview(label: self.project.manifest.label(for: span)))
-                let anchor = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: 1)
-                popover.show(relativeTo: anchor, of: textView, preferredEdge: .minY)
+                popover.show(relativeTo: rect, of: textView, preferredEdge: .minX)
                 self.preview = popover
             }
         }
@@ -691,10 +690,13 @@ final class ScriptTextView: NSTextView {
         return nil
     }
 
-    private func spanRule(at point: NSPoint) -> String? {
+    /// The block whose margin rule is under the point, and the rule itself.
+    /// Hovering the words does nothing: the mouse spends all its time there
+    /// while writing, and a popover that follows it flickers.
+    private func spanRule(at point: NSPoint) -> (id: String, rule: NSRect)? {
         for run in spanRuns() {
             guard let box = box(for: run.range) else { continue }
-            if ruleHitBox(beside: box).contains(point) { return run.id }
+            if ruleHitBox(beside: box).contains(point) { return (run.id, rule(beside: box)) }
         }
         return nil
     }
@@ -723,10 +725,10 @@ final class ScriptTextView: NSTextView {
             hoveredChip = nil
             onHoverChip?(nil, .zero)
         }
-        let found = span(at: point)
+        let found = spanRule(at: point)
         if found?.id != hoveredSpan {
             hoveredSpan = found?.id
-            onHoverSpan?(found?.id, found?.box ?? .zero)
+            onHoverSpan?(found?.id, found?.rule ?? .zero)
         }
     }
 
@@ -806,8 +808,8 @@ final class ScriptTextView: NSTextView {
         let point = convert(event.locationInWindow, from: nil)
         // The margin rule goes to the pages. Clicking the words never does —
         // that has to keep placing the caret.
-        if let id = spanRule(at: point) {
-            onClickSpan?(id)
+        if let found = spanRule(at: point) {
+            onClickSpan?(found.id)
             return
         }
         if event.modifierFlags.contains(.command), let found = span(at: point) {
