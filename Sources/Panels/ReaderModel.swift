@@ -725,15 +725,9 @@ final class ReaderModel {
                     case .rect(let rect): image = try PageCropper.crop(pageURL, unitRect: rect)
                     case .polygon(let points): image = try PageCropper.crop(pageURL, polygon: points)
                     }
+                    // Only what was asked for: a drawn shape saves the shape.
+                    // The whole page is its own command when it's wanted.
                     let written = try writer.write(image, record: record)
-                    // The whole page goes alongside, once, so the editor can
-                    // reframe without ever opening the comic.
-                    if kind != .page, !writer.hasPage(for: record) {
-                        var page = record
-                        page.kind = .page; page.panel = nil; page.region = nil; page.polygon = nil
-                        page.citation = identity.citation(pages: [pageNumber])
-                        try writer.write(try PageCropper.crop(pageURL, unitRect: nil), record: page)
-                    }
                     return .success(written.file)
                 } catch {
                     return .failure(error)

@@ -140,9 +140,12 @@ struct ReaderProjectTests {
         #expect(citation.pageIndex == 10)
         let file = try #require(citation.captureFile)
         #expect(FileManager.default.fileExists(atPath: project.capturesFolder.appendingPathComponent(file).path))
-        // The whole page went alongside.
-        #expect(FileManager.default.fileExists(atPath: project.capturesFolder.appendingPathComponent(
+        // Only the shape: the whole page is its own command, not a companion.
+        #expect(!FileManager.default.fileExists(atPath: project.capturesFolder.appendingPathComponent(
             file.replacingOccurrences(of: "shape", with: "page")).path))
+        let written = try FileManager.default.contentsOfDirectory(atPath: project.capturesFolder.path)
+            .filter { $0.hasSuffix(".png") }
+        #expect(written == [file])
         #expect(project.pendingInsertion?.id == citation.id)
         model.closeProject()
     }
