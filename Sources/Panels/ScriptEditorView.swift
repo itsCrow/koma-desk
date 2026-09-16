@@ -27,6 +27,7 @@ struct ScriptEditorView: NSViewRepresentable {
         let model = model
         textView.onFocusChange = { editing in model.isScriptEditing = editing }
         let coordinator = context.coordinator
+        textView.onHoverChip = { [weak coordinator] chip, rect in coordinator?.hover(chip, at: rect) }
         textView.markdown = { [weak coordinator] range in coordinator?.markdown(of: range) ?? "" }
         textView.attributedString = { [weak coordinator] markdown in coordinator?.render(markdown) ?? NSAttributedString() }
         textView.delegate = context.coordinator
@@ -284,6 +285,38 @@ struct ScriptEditorView: NSViewRepresentable {
             return ScriptStyle.Paragraph(rawValue: raw ?? "") ?? .body
         }
 
+        // MARK: Hover preview
+
+        private var preview: NSPopover?
+        private var previewTask: Task<Void, Never>?
+
+        /// A beat after the mouse settles on a chip, its citation and capture
+        /// appear beside it; they go when the mouse does.
+        func hover(_ chip: CitationAttachment?, at rect: NSRect) {
+            previewTask?.cancel()
+            guard let chip, let id = chip.citationID, let textView else {
+                preview?.close()
+                preview = nil
+                return
+            }
+            previewTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(220))
+                guard !Task.isCancelled, let self else { return }
+                self.preview?.close()
+                let popover = NSPopover()
+                popover.behavior = .applicationDefined
+                popover.animates = false
+                popover.appearance = NSAppearance(named: .darkAqua)
+                popover.contentViewController = NSHostingController(rootView: CitationPreview(
+                    text: chip.citationText,
+                    image: self.thumbnail(for: id),
+                    pages: self.project.citation(id: id)?.pageNumbers ?? []
+                ))
+                popover.show(relativeTo: rect, of: textView, preferredEdge: .maxY)
+                self.preview = popover
+            }
+        }
+
         // MARK: Clicks
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
@@ -312,6 +345,57 @@ final class ScriptTextView: NSTextView {
     var onFocusChange: ((Bool) -> Void)?
     var markdown: ((NSRange) -> String)?
     var attributedString: ((String) -> NSAttributedString)?
+    /// The chip under the mouse and where it is, or nil when there isn't one.
+    var onHoverChip: ((CitationAttachment?, NSRect) -> Void)?
+
+    private var hoverTracking: NSTrackingArea?
+    private weak var hoveredChip: CitationAttachment?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverTracking = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        if let (chip, rect) = chip(at: point) {
+            if chip !== hoveredChip {
+                hoveredChip = chip
+                onHoverChip?(chip, rect)
+            }
+        } else if hoveredChip != nil {
+            hoveredChip = nil
+            onHoverChip?(nil, .zero)
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        if hoveredChip != nil {
+            hoveredChip = nil
+            onHoverChip?(nil, .zero)
+        }
+    }
+
+    /// The chip whose glyph is under `point`, in view coordinates.
+    private func chip(at point: NSPoint) -> (CitationAttachment, NSRect)? {
+        guard let layoutManager, let textContainer, let storage = textStorage, storage.length > 0 else { return nil }
+        let inContainer = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        let glyph = layoutManager.glyphIndex(for: inContainer, in: textContainer, fractionOfDistanceThroughGlyph: nil)
+        guard glyph < layoutManager.numberOfGlyphs else { return nil }
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+            .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        guard rect.insetBy(dx: -2, dy: -2).contains(point) else { return nil }
+        let index = layoutManager.characterIndexForGlyph(at: glyph)
+        guard index < storage.length,
+              let chip = storage.attribute(.attachment, at: index, effectiveRange: nil) as? CitationAttachment
+        else { return nil }
+        return (chip, rect)
+    }
 
     override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
         [Self.markdownType] + super.writablePasteboardTypes
@@ -415,9 +499,8 @@ final class CitationAttachment: NSTextAttachment {
 }
 
 private final class CitationChipCell: NSTextAttachmentCell {
-    private static let font = NSFont.systemFont(ofSize: 12.5, weight: .medium)
-    private static let thumbnailHeight: CGFloat = 40
-    private static let padding: CGFloat = 8
+    /// A footnote-sized marker: sits in the line like a character.
+    private static let size = NSSize(width: 21, height: 15)
 
     private var chip: CitationAttachment? { attachment as? CitationAttachment }
 
@@ -430,55 +513,32 @@ private final class CitationChipCell: NSTextAttachmentCell {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private var textSize: NSSize {
-        (chip?.citationText ?? "").size(withAttributes: [.font: Self.font])
-    }
+    override func cellSize() -> NSSize { Self.size }
 
-    private var thumbnailWidth: CGFloat {
-        guard let image = chip?.thumbnail, image.size.height > 0 else { return 0 }
-        return min(Self.thumbnailHeight * image.size.width / image.size.height, 90)
-    }
-
-    override func cellSize() -> NSSize {
-        let hasThumbnail = thumbnailWidth > 0
-        let height = hasThumbnail ? Self.thumbnailHeight + 6 : textSize.height + 8
-        let width = Self.padding + (hasThumbnail ? thumbnailWidth + 8 : 14) + textSize.width + Self.padding
-        return NSSize(width: ceil(width), height: ceil(height))
-    }
-
-    override func cellBaselineOffset() -> NSPoint {
-        let hasThumbnail = thumbnailWidth > 0
-        return NSPoint(x: 0, y: hasThumbnail ? -(Self.thumbnailHeight + 6) * 0.62 : -6)
-    }
+    override func cellBaselineOffset() -> NSPoint { NSPoint(x: 0, y: -3) }
 
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {
-        let path = NSBezierPath(roundedRect: cellFrame.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
-        NSColor.controlAccentColor.withAlphaComponent(0.22).setFill()
+        let rect = cellFrame.insetBy(dx: 1, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+        NSColor.controlAccentColor.setFill()
         path.fill()
-        NSColor.controlAccentColor.withAlphaComponent(0.6).setStroke()
-        path.lineWidth = 1
-        path.stroke()
 
-        var x = cellFrame.minX + Self.padding
-        if let image = chip?.thumbnail, thumbnailWidth > 0 {
-            let rect = NSRect(x: x, y: cellFrame.minY + 3, width: thumbnailWidth, height: Self.thumbnailHeight)
-            NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).addClip()
-            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
-            NSGraphicsContext.current?.restoreGraphicsState()
-            NSGraphicsContext.current?.saveGraphicsState()
-            x += thumbnailWidth + 8
-        } else {
-            let icon = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
-            let iconRect = NSRect(x: x, y: cellFrame.midY - 6, width: 12, height: 12)
-            NSColor.white.withAlphaComponent(0.85).set()
-            icon?.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 0.85, respectFlipped: true, hints: nil)
-            x += 14
-        }
-        let text = chip?.citationText ?? ""
-        let size = textSize
-        text.draw(at: NSPoint(x: x, y: cellFrame.midY - size.height / 2),
-                  withAttributes: [.font: Self.font, .foregroundColor: NSColor.white])
+        let name = chip?.thumbnail == nil ? "doc.text" : "photo"
+        guard let icon = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .bold)) else { return }
+        let iconSize = NSSize(width: 11, height: 11)
+        let iconRect = NSRect(x: rect.midX - iconSize.width / 2, y: rect.midY - iconSize.height / 2,
+                              width: iconSize.width, height: iconSize.height)
+        NSGraphicsContext.current?.saveGraphicsState()
+        NSColor.white.set()
+        let tinted = icon.copy() as! NSImage
+        tinted.isTemplate = true
+        tinted.lockFocus()
+        NSColor.white.set()
+        NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
+        tinted.unlockFocus()
+        tinted.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        NSGraphicsContext.current?.restoreGraphicsState()
     }
 
     override func wantsToTrackMouse() -> Bool { true }
@@ -512,5 +572,33 @@ private final class CitationChipCell: NSTextAttachmentCell {
 
     override func trackMouse(with theEvent: NSEvent, in cellFrame: NSRect, of controlView: NSView?, untilMouseUp flag: Bool) -> Bool {
         true
+    }
+}
+
+/// What a chip stands for, shown beside it on hover.
+private struct CitationPreview: View {
+    let text: String
+    let image: NSImage?
+    let pages: [Int]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 260, maxHeight: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white)
+            Text("Click to open the page · drag to move")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .padding(12)
+        .frame(minWidth: 180, alignment: .leading)
     }
 }
