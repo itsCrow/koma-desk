@@ -203,24 +203,38 @@ struct ReaderControlsPanel: View {
     // MARK: - Expanded grid
 
     /// Every page at once, scrolling down — the panel filling the page area.
+    ///
+    /// Cells are sized so two rows fill the height, rather than by width,
+    /// which is what decides how big a page reads at a glance.
     private var pageGrid: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 18, alignment: .top)],
-                    alignment: .leading,
-                    spacing: 18
-                ) {
-                    ForEach(model.overviewPages, id: \.self) { page in
-                        gridCell(page: page).id(page)
+        GeometryReader { geometry in
+            let spacing: CGFloat = 18
+            // What sits under each page: the gap and the number.
+            let caption: CGFloat = 6 + 14
+            let rowHeight = max(110, (geometry.size.height - spacing) / 2)
+            let pageHeight = rowHeight - caption
+            // One page's shape, from the comic itself where we know it.
+            let pageAspect = (model.spreadAspect ?? 1.414) / 2
+            let cellWidth = max(90, pageHeight * pageAspect)
+
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: cellWidth, maximum: cellWidth),
+                                           spacing: spacing, alignment: .top)],
+                        alignment: .center,
+                        spacing: spacing
+                    ) {
+                        ForEach(model.overviewPages, id: \.self) { page in
+                            gridCell(page: page, height: pageHeight).id(page)
+                        }
                     }
+                    .padding(.horizontal, 8)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-            }
-            .onAppear { proxy.scrollTo(currentPageIndex, anchor: .center) }
-            .onChange(of: model.spreadIndex) { _, _ in
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(currentPageIndex, anchor: .center) }
+                .onAppear { proxy.scrollTo(currentPageIndex, anchor: .center) }
+                .onChange(of: model.spreadIndex) { _, _ in
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(currentPageIndex, anchor: .center) }
+                }
             }
         }
     }
@@ -229,13 +243,13 @@ struct ReaderControlsPanel: View {
         model.currentSpread?.pageIndices.first ?? 0
     }
 
-    private func gridCell(page: Int) -> some View {
+    private func gridCell(page: Int, height: CGFloat) -> some View {
         let isCurrent = model.currentSpread?.pageIndices.contains(page) ?? false
         return Button {
             model.goToPage(page)
         } label: {
             VStack(spacing: 6) {
-                GridPageThumbnail(url: model.pages[page])
+                GridPageThumbnail(url: model.pages[page], height: height)
                     .overlay(alignment: .topTrailing) { hitBadge(forPageIndex: page) }
                     .overlay {
                         if isCurrent {
@@ -346,6 +360,7 @@ struct ReaderControlsPanel: View {
 /// A page in the grid: sized by the column, height following the page.
 private struct GridPageThumbnail: View {
     let url: URL
+    let height: CGFloat
     @State private var image: NSImage?
 
     var body: some View {
@@ -357,10 +372,9 @@ private struct GridPageThumbnail: View {
                     .aspectRatio(contentMode: .fit)
             } else {
                 Color.white.opacity(0.1)
-                    .aspectRatio(0.7, contentMode: .fit)
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 5))
         .shadow(color: .black.opacity(0.4), radius: 6, y: 3)
         .task(id: url) {
