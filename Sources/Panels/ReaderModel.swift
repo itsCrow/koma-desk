@@ -717,8 +717,11 @@ final class ReaderModel {
     func exportShots() {
         guard let project else { return }
         let shots = project.citationsInScriptOrder
-        guard !shots.isEmpty else {
-            errorMessage = "There are no citations in the script yet."
+        let notes = project.notesInScriptOrder
+        // A script can be worth handing over before a single panel has been
+        // captured — the ranges and the notes are the point of it.
+        guard !shots.isEmpty || !notes.isEmpty || !project.spansInScriptOrder.isEmpty else {
+            errorMessage = "There's nothing to export yet — no shots, page ranges or notes in the script."
             return
         }
         let panel = NSSavePanel()
@@ -766,10 +769,18 @@ final class ReaderModel {
                 }
                 lines.append("")
             }
+            if !notes.isEmpty {
+                lines.append("NOTES — \(notes.count)")
+                lines.append("")
+                for note in notes { lines.append("· \(note)") }
+                lines.append("")
+            }
             try lines.joined(separator: "\n").write(to: folder.appendingPathComponent("Shots.txt"),
                                                     atomically: true, encoding: .utf8)
             NSWorkspace.shared.activateFileViewerSelecting([folder])
-            lastCaptureMessage = "Exported \(shots.count) shots"
+            lastCaptureMessage = notes.isEmpty
+                ? "Exported \(shots.count) shots"
+                : "Exported \(shots.count) shots and \(notes.count) note\(notes.count == 1 ? "" : "s")"
         } catch {
             errorMessage = "Couldn’t export the shots. \(error.localizedDescription)"
         }
@@ -787,11 +798,20 @@ final class ReaderModel {
     }
 
     func copyScriptAsPlainText() {
+        copyScript(notes: .omit, saying: "Script copied as plain text")
+    }
+
+    /// For a document the editor reads rather than a voice booth.
+    func copyScriptWithNotes() {
+        copyScript(notes: .marked, saying: "Script copied with notes")
+    }
+
+    private func copyScript(notes: ScriptMarkdown.NoteHandling, saying message: String) {
         guard let project else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(project.plainTextScript, forType: .string)
-        lastCaptureMessage = "Script copied as plain text"
+        pasteboard.setString(project.plainTextScript(notes: notes), forType: .string)
+        lastCaptureMessage = message
     }
 
     func format(_ command: ScriptCommand) {

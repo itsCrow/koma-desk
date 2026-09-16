@@ -196,8 +196,26 @@ final class Project {
     /// block of writing keeps its page range, so the ranges survive the trip
     /// into Google Docs.
     var plainTextScript: String {
+        plainTextScript(notes: .omit)
+    }
+
+    /// The script as plain text. Notes are left out by default: this is what
+    /// gets read aloud, and an aside to the editor isn't part of it.
+    func plainTextScript(notes: ScriptMarkdown.NoteHandling) -> String {
         let labels = Dictionary(manifest.spans.map { ($0.id, $0.text) }, uniquingKeysWith: { first, _ in first })
-        return ScriptMarkdown.plainText(ScriptMarkdown.parse(script), spanLabels: labels)
+        return ScriptMarkdown.plainText(ScriptMarkdown.parse(script), spanLabels: labels, notes: notes)
+    }
+
+    /// The asides, in the order they appear.
+    var notesInScriptOrder: [String] {
+        ScriptMarkdown.parse(script).filter(\.isNote).map { block in
+            block.inlines.map { run -> String in
+                switch run {
+                case .text(let s): return s
+                case .citation(_, let text): return text
+                }
+            }.joined().trimmingCharacters(in: .whitespaces)
+        }.filter { !$0.isEmpty }
     }
 }
 
@@ -205,6 +223,8 @@ final class Project {
 enum ScriptCommand: Equatable {
     case heading(Int)
     case body
+    /// An aside for the editor rather than something to read aloud.
+    case note
 }
 
 /// What to do to the page range around the writing at the cursor.

@@ -118,6 +118,7 @@ struct ScriptEditorView: NSViewRepresentable {
                 let style: ScriptStyle.Paragraph
                 switch block.kind {
                 case .heading(let level): style = level == 1 ? .heading1 : .heading2
+                case .note: style = .note
                 case .paragraph: style = .body
                 }
                 let start = result.length
@@ -185,7 +186,7 @@ struct ScriptEditorView: NSViewRepresentable {
                     content.length -= 1
                 }
                 var runs: [ScriptInline] = []
-                var level = 0
+                var kind = ScriptBlock.Kind.paragraph
                 // Deliberately the first character, not "the first one found":
                 // a fragment pasted into the middle of a paragraph must not
                 // pull the whole paragraph into its block.
@@ -208,12 +209,19 @@ struct ScriptEditorView: NSViewRepresentable {
                             }
                         }
                     }
-                    if level == 0, let style = attributes[ScriptStyle.paragraphKey] as? String {
-                        level = style == ScriptStyle.Paragraph.heading1.rawValue ? 1
-                              : style == ScriptStyle.Paragraph.heading2.rawValue ? 2 : 0
+                    // The first run that isn't plain body decides the line's
+                    // kind, the way the heading level used to.
+                    if kind == .paragraph, let raw = attributes[ScriptStyle.paragraphKey] as? String,
+                       let style = ScriptStyle.Paragraph(rawValue: raw) {
+                        switch style {
+                        case .heading1: kind = .heading(level: 1)
+                        case .heading2: kind = .heading(level: 2)
+                        case .note: kind = .note
+                        case .body: break
+                        }
                     }
                 }
-                blocks.append(level > 0 ? .heading(level: level, runs, span: span) : .paragraph(runs, span: span))
+                blocks.append(ScriptBlock(kind: kind, span: span, inlines: runs))
                 if lineRange.length == 0 || content.length == lineRange.length { break }
                 location = lineRange.location + lineRange.length
                 if location == string.length {
@@ -372,6 +380,7 @@ struct ScriptEditorView: NSViewRepresentable {
             switch command {
             case .heading(1): style = .heading1
             case .heading: style = .heading2
+            case .note: style = .note
             case .body: style = .body
             }
             let string = storage.string as NSString
@@ -623,6 +632,7 @@ final class ScriptTextView: NSTextView {
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
+        drawNoteBars(in: rect)
         for run in spanRuns() {
             guard let box = box(for: run.range), box.intersects(rect) else { continue }
             let hovered = isShowingCard(run.id)
@@ -635,6 +645,41 @@ final class ScriptTextView: NSTextView {
             let rule = NSBezierPath(roundedRect: rule(beside: box), xRadius: 1.5, yRadius: 1.5)
             NSColor.systemOrange.withAlphaComponent(hovered ? 1 : 0.6).setFill()
             rule.fill()
+        }
+    }
+
+    /// Each run of consecutive note paragraphs, so a note of several lines
+    /// reads as one aside rather than a stack of bars.
+    private func noteRuns() -> [NSRange] {
+        guard let storage = textStorage, storage.length > 0 else { return [] }
+        let string = storage.string as NSString
+        var runs: [NSRange] = []
+        var location = 0
+        while location < string.length {
+            let paragraph = string.paragraphRange(for: NSRange(location: location, length: 0))
+            let raw = storage.attribute(ScriptStyle.paragraphKey, at: paragraph.location, effectiveRange: nil) as? String
+            if ScriptStyle.Paragraph(rawValue: raw ?? "") == .note {
+                if var last = runs.last, last.location + last.length == paragraph.location {
+                    last.length += paragraph.length
+                    runs[runs.count - 1] = last
+                } else {
+                    runs.append(paragraph)
+                }
+            }
+            location = paragraph.location + max(paragraph.length, 1)
+        }
+        return runs
+    }
+
+    /// A bar down the side of an aside, in the room `headIndent` leaves for it.
+    private func drawNoteBars(in rect: NSRect) {
+        guard let textContainer else { return }
+        for run in noteRuns() {
+            guard let box = box(for: run), box.intersects(rect) else { continue }
+            let x = textContainerOrigin.x + textContainer.lineFragmentPadding + 1
+            let bar = NSRect(x: x, y: box.minY + 3, width: 2.5, height: max(box.height - 6, 0))
+            ScriptStyle.noteColour.withAlphaComponent(0.55).setFill()
+            NSBezierPath(roundedRect: bar, xRadius: 1.25, yRadius: 1.25).fill()
         }
     }
 
@@ -874,8 +919,14 @@ enum ScriptStyle {
     }
 
     enum Paragraph: String {
-        case body, heading1, heading2
+        case body, heading1, heading2, note
     }
+
+    /// Notes are teal: the chips are the accent blue and page ranges are
+    /// orange, so an aside needs a third voice of its own.
+    static let noteColour = NSColor.systemTeal
+    /// The bar a note sits behind, and the room made for it by `headIndent`.
+    static let noteIndent: CGFloat = 14
 
     static func attributes(for style: Paragraph) -> [NSAttributedString.Key: Any] {
         let font: NSFont
@@ -883,13 +934,27 @@ enum ScriptStyle {
         case .body: font = .systemFont(ofSize: 15)
         case .heading1: font = .systemFont(ofSize: 22, weight: .bold)
         case .heading2: font = .systemFont(ofSize: 17, weight: .semibold)
+        case .note:
+            let base = NSFont.systemFont(ofSize: 13)
+            font = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
         }
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = style == .body ? 4 : 2
-        paragraph.paragraphSpacing = style == .body ? 8 : 6
+        paragraph.lineSpacing = style == .body || style == .note ? 4 : 2
+        paragraph.paragraphSpacing = style == .body || style == .note ? 8 : 6
+        if style == .note {
+            // Room for the bar, on every line of the note.
+            paragraph.firstLineHeadIndent = noteIndent
+            paragraph.headIndent = noteIndent
+        }
+        let colour: NSColor
+        switch style {
+        case .note: colour = noteColour
+        case .body: colour = NSColor.white.withAlphaComponent(0.92)
+        default: colour = .white
+        }
         return [
             .font: font,
-            .foregroundColor: NSColor.white.withAlphaComponent(style == .body ? 0.92 : 1),
+            .foregroundColor: colour,
             .paragraphStyle: paragraph,
             paragraphKey: style.rawValue,
         ]

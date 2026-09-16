@@ -13,6 +13,9 @@ public struct ScriptBlock: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         case paragraph
         case heading(level: Int)
+        /// An aside for the editor — "hold this panel a beat". Part of the
+        /// script file, but never part of what gets read aloud.
+        case note
     }
 
     public var kind: Kind
@@ -36,10 +39,16 @@ public struct ScriptBlock: Equatable, Sendable {
         ScriptBlock(kind: .heading(level: level), span: span, inlines: inlines)
     }
 
+    public static func note(_ inlines: [ScriptInline], span: String? = nil) -> ScriptBlock {
+        ScriptBlock(kind: .note, span: span, inlines: inlines)
+    }
+
     public var headingLevel: Int? {
         if case .heading(let level) = kind { return level }
         return nil
     }
+
+    public var isNote: Bool { kind == .note }
 }
 
 /// The script's file format: Markdown, one block per line, citations as links
@@ -74,6 +83,11 @@ public enum ScriptMarkdown {
             span = marker.id
             body = String(marker.rest)
         }
+        // A blockquote is a note: real Markdown, so the file still reads
+        // anywhere, and an aside is exactly what a quote block looks like.
+        if body.hasPrefix(noteMarker) {
+            return .note(parseInlines(String(body.dropFirst(noteMarker.count))), span: span)
+        }
         var level = 0
         var rest = Substring(body)
         while rest.first == "#", level < 2 { level += 1; rest = rest.dropFirst() }
@@ -84,6 +98,7 @@ public enum ScriptMarkdown {
     }
 
     static let spanOpening = "<span:"
+    static let noteMarker = "> "
 
     /// `<span:k7m2pq> ` at the very start of a line, and what follows it.
     /// Anything that isn't exactly this shape is ordinary prose.
@@ -168,11 +183,15 @@ public enum ScriptMarkdown {
         switch block.kind {
         case .heading(let level):
             return prefix + String(repeating: "#", count: max(1, min(level, 2))) + " " + serializeInlines(block.inlines)
+        case .note:
+            return prefix + noteMarker + serializeInlines(block.inlines)
         case .paragraph:
             var body = serializeInlines(block.inlines)
-            // A paragraph that happens to start like a heading, or like a span
-            // marker, is escaped so it comes back as the paragraph it is.
-            if body.hasPrefix("#") || parseSpanMarker(body) != nil { body = "\\" + body }
+            // A paragraph that happens to start like a heading, a note or a
+            // span marker is escaped so it comes back as the paragraph it is.
+            if body.hasPrefix("#") || body.hasPrefix(noteMarker) || parseSpanMarker(body) != nil {
+                body = "\\" + body
+            }
             return prefix + body
         }
     }
@@ -255,13 +274,38 @@ public enum ScriptMarkdown {
 
     // MARK: - Plain text
 
+    /// What a paste elsewhere does with the notes: leaves them out, since
+    /// they are not the narration, or brings them along marked as asides.
+    public enum NoteHandling: Equatable, Sendable {
+        case omit
+        case marked
+    }
+
     /// For pasting somewhere that isn't the app: chips become their text.
     ///
     /// With `spanLabels`, each block of writing carries its page range on its
     /// last line — "… (pp. 12–17)". Without them the ranges are dropped, which
     /// is what a caller wants when the reader already knows.
-    public static func plainText(_ blocks: [ScriptBlock], spanLabels: [String: String] = [:]) -> String {
-        blocks.enumerated().map { index, block in
+    public static func plainText(_ blocks: [ScriptBlock], spanLabels: [String: String] = [:],
+                                notes: NoteHandling = .omit) -> String {
+        // Filtered before anything else: a range's label lands on the last
+        // line of its run, and dropping that line later would take the label
+        // with it.
+        let blocks = blocks.compactMap { block -> ScriptBlock? in
+            guard block.isNote else { return block }
+            switch notes {
+            case .omit:
+                return nil
+            case .marked:
+                // Marked here rather than later, so nothing downstream has to
+                // remember that this line used to be a note.
+                var inlines: [ScriptInline] = [.text("[NOTE: ")]
+                inlines += block.inlines
+                inlines.append(.text("]"))
+                return ScriptBlock(kind: .paragraph, span: block.spanID, inlines: inlines)
+            }
+        }
+        return blocks.enumerated().map { index, block in
             var line = block.inlines.map { run -> String in
                 switch run {
                 case .text(let s): return s

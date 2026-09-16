@@ -81,8 +81,13 @@ struct PanelsApp: App {
                 Button("Body Text") { model.format(.body) }
                     .keyboardShortcut("0", modifiers: [.command, .option])
                     .disabled(model.project == nil)
+                Button("Note to Editor") { model.format(.note) }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
+                    .disabled(model.project == nil)
                 Divider()
                 Button("Copy Script for Google Docs") { model.copyScriptAsPlainText() }
+                    .disabled(model.project == nil)
+                Button("Copy Script with Notes") { model.copyScriptWithNotes() }
                     .disabled(model.project == nil)
                 Button("Export Shots…") { model.exportShots() }
                     .disabled(model.project == nil)

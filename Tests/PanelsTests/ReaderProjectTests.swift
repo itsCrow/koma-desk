@@ -649,6 +649,48 @@ struct ReaderProjectTests {
         #expect(textView.spanRuns().count == 1)
     }
 
+    @Test("Turning a line into a note survives the round trip, span and all")
+    func notesInTheEditor() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: """
+        <span:k7m2pq> Goku's training begins in earnest.
+        <span:k7m2pq> Hold this panel a beat.
+        <span:k7m2pq> The milk gag lands three times over.
+        """, in: scratch)
+        let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|1", firstPageIndex: 11,
+                            pageNumbers: [12, 17], text: "Berserk, Vol. 1, pp. 12–17")
+        project.manifest.store(span)
+
+        // Make the middle line an aside.
+        let middle = (textView.string as NSString).range(of: "Hold this panel a beat.")
+        textView.setSelectedRange(NSRange(location: middle.location, length: 0))
+        coordinator.apply(.note)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+
+        let blocks = ScriptMarkdown.parse(project.script)
+        #expect(blocks.map(\.isNote) == [false, true, false])
+        // The page range survives being restyled, as headings already had to.
+        #expect(blocks.map(\.spanID) == ["k7m2pq", "k7m2pq", "k7m2pq"])
+        #expect(textView.spanRuns().count == 1)
+        #expect(project.notesInScriptOrder == ["Hold this panel a beat."])
+
+        // It is not narration...
+        #expect(project.plainTextScript == """
+        Goku's training begins in earnest.
+        The milk gag lands three times over. (Berserk, Vol. 1, pp. 12–17)
+        """)
+        // ...until the paste asks for it.
+        #expect(project.plainTextScript(notes: .marked).contains("[NOTE: Hold this panel a beat.]"))
+
+        // And back to prose again.
+        textView.setSelectedRange(NSRange(location: middle.location, length: 0))
+        coordinator.apply(.body)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).allSatisfy { !$0.isNote })
+        #expect(project.notesInScriptOrder.isEmpty)
+    }
+
     @Test("A block's label says the pages, and the chapter only when it differs")
     func spanLabelText() throws {
         let scratch = try Scratch()

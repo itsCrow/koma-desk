@@ -154,6 +154,61 @@ struct ScriptSpanTests {
     }
 }
 
+@Suite("Notes to the editor")
+struct ScriptNoteTests {
+    @Test("A note is a line of its own, and round-trips as a blockquote")
+    func notes() {
+        let text = """
+        Goku's training begins in earnest.
+        > Hold this panel a beat before the cut.
+        The milk gag lands three times over.
+        """
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks.map(\.isNote) == [false, true, false])
+        #expect(blocks[1].inlines == [.text("Hold this panel a beat before the cut.")])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+
+        // Notes carry citations and page ranges like any other line.
+        let rich = "<span:k7m2pq> > Maybe use [p. 14](panels://cite/abc123) instead."
+        let parsed = ScriptMarkdown.parse(rich)
+        #expect(parsed[0].isNote)
+        #expect(parsed[0].spanID == "k7m2pq")
+        #expect(ScriptMarkdown.citationIDs(in: rich) == ["abc123"])
+        #expect(ScriptMarkdown.serialize(parsed) == rich)
+    }
+
+    @Test("Prose that begins like a note stays prose")
+    func noteEscapes() {
+        let typed: [ScriptBlock] = [.paragraph([.text("> not a note, just a chevron")])]
+        let serialized = ScriptMarkdown.serialize(typed)
+        #expect(serialized == "\\> not a note, just a chevron")
+        #expect(ScriptMarkdown.parse(serialized) == typed)
+        // A chevron with no space after it was never a note to begin with.
+        #expect(ScriptMarkdown.parse(">nospace")[0].isNote == false)
+    }
+
+    @Test("A note is not narration, unless the paste asks for it")
+    func notesInPlainText() {
+        let blocks = ScriptMarkdown.parse("""
+        <span:k7m2pq> Goku's training begins.
+        <span:k7m2pq> > Hold this panel a beat.
+        The milk gag lands three times over.
+        """)
+        // Left out, and the range's label moves up to the line that remains —
+        // it must not be dropped along with the note.
+        #expect(ScriptMarkdown.plainText(blocks, spanLabels: ["k7m2pq": "pp. 12–17"]) == """
+        Goku's training begins. (pp. 12–17)
+        The milk gag lands three times over.
+        """)
+        // Or brought along, marked, for a document the editor reads.
+        #expect(ScriptMarkdown.plainText(blocks, spanLabels: ["k7m2pq": "pp. 12–17"], notes: .marked) == """
+        Goku's training begins.
+        [NOTE: Hold this panel a beat.] (pp. 12–17)
+        The milk gag lands three times over.
+        """)
+    }
+}
+
 @Suite("Citation order in a script")
 struct CitationOrderTests {
     @Test("Ids come back in the order they appear, not the order they were made")
