@@ -469,7 +469,15 @@ final class ScriptTextView: NSTextView {
         return super.readSelection(from: pboard, type: type)
     }
 
+    override func mouseDown(with event: NSEvent) {
+        // A selection on a page keeps its own view first responder; let go
+        // of it before this view asks for the keyboard.
+        NotificationCenter.default.post(name: .panelsClearPageTextSelection, object: nil)
+        super.mouseDown(with: event)
+    }
+
     override func becomeFirstResponder() -> Bool {
+        NotificationCenter.default.post(name: .panelsClearPageTextSelection, object: nil)
         let result = super.becomeFirstResponder()
         if result { onFocusChange?(true) }
         return result
