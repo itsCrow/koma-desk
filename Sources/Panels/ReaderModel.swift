@@ -78,6 +78,8 @@ final class ReaderModel {
     }
     /// The script pane is showing the shot list rather than the writing.
     var showsShotList = false
+    /// The controls panel is expanded into a grid filling the page area.
+    var isOverviewExpanded = false
     var scriptPlacement: ScriptPlacement {
         didSet { UserDefaults.standard.set(scriptPlacement.rawValue, forKey: Self.scriptPlacementKey) }
     }
@@ -233,6 +235,7 @@ final class ReaderModel {
     }
 
     func closeComic() {
+        isOverviewExpanded = false
         isCapturing = false
         isChoosingPageToSave = false
         detectedPanels = [:]
@@ -322,6 +325,23 @@ final class ReaderModel {
     func goTo(spread index: Int) {
         guard spreads.indices.contains(index) else { return }
         spreadIndex = index
+    }
+
+    /// The spread a page belongs to — a grid of pages has to turn a page back
+    /// into the spread that holds it.
+    func spreadIndex(containingPage page: Int) -> Int? {
+        spreads.firstIndex { $0.pageIndices.contains(page) }
+    }
+
+    func goToPage(_ page: Int) {
+        guard let index = spreadIndex(containingPage: page) else { return }
+        goTo(spread: index)
+    }
+
+    /// Pages to show in the expanded grid: every page, or only those with
+    /// hits while a search is running.
+    var overviewPages: [Int] {
+        isSearching ? pages.indices.filter { hitsByPage[$0, default: 0] > 0 } : Array(pages.indices)
     }
 
     /// The lower-numbered page on screen — what "page 2 of 8" means for a

@@ -66,6 +66,10 @@ struct ReaderView: View {
                 model.isChoosingPageToSave = false
                 return .handled
             }
+            if model.isOverviewExpanded {
+                withAnimation(.easeOut(duration: 0.22)) { model.isOverviewExpanded = false }
+                return .handled
+            }
             if model.isCapturing {
                 model.isCapturing = false
                 return .handled
@@ -201,8 +205,12 @@ struct ReaderView: View {
                         .onTapGesture { setControls(visible: false) }
                         .transition(.opacity)
 
-                    ReaderControlsPanel(model: model,
-                                        height: min(max(260, geometry.size.height * 0.32), 340))
+                    ReaderControlsPanel(
+                        model: model,
+                        height: model.isOverviewExpanded
+                            ? max(260, geometry.size.height - 32)
+                            : min(max(260, geometry.size.height * 0.32), 340)
+                    )
                         .padding(.horizontal, 16)
                         .padding(.bottom, 16)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -289,6 +297,7 @@ struct ReaderView: View {
 
     private func setControls(visible: Bool) {
         guard visible != showsControls else { return }
+        if !visible { model.isOverviewExpanded = false }
         withAnimation(.easeOut(duration: 0.22)) { showsControls = visible }
         if visible {
             endLinger()

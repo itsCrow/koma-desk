@@ -35,7 +35,11 @@ struct ReaderControlsPanel: View {
 
             HStack(spacing: 0) {
                 edgeArrow("chevron.left", enabled: leftEnabled) { model.pressedLeftArrow() }
-                overview
+                if model.isOverviewExpanded {
+                    pageGrid
+                } else {
+                    overview
+                }
                 edgeArrow("chevron.right", enabled: rightEnabled) { model.pressedRightArrow() }
             }
             .frame(maxHeight: .infinity)
@@ -70,8 +74,12 @@ struct ReaderControlsPanel: View {
                 cornerButton("doc.on.doc", help: "Save Page (⌥⇧⌘P)") { model.savePage() }
                 cornerButton("crop", help: "Draw Around a Panel (⇧⌘P)") { model.toggleCapture() }
                 cornerButton("quote.opening", help: "Copy Citation") { copyCitation() }
-                cornerButton("arrow.up.left.and.arrow.down.right", help: "Full Screen") {
-                    NSApp.keyWindow?.toggleFullScreen(nil)
+                cornerButton(
+                    model.isOverviewExpanded ? "arrow.down.right.and.arrow.up.left"
+                                             : "arrow.up.left.and.arrow.down.right",
+                    help: model.isOverviewExpanded ? "Collapse" : "Expand to all pages"
+                ) {
+                    withAnimation(.easeOut(duration: 0.22)) { model.isOverviewExpanded.toggle() }
                 }
             }
         }
@@ -192,6 +200,74 @@ struct ReaderControlsPanel: View {
         }
     }
 
+    // MARK: - Expanded grid
+
+    /// Every page at once, scrolling down — the panel filling the page area.
+    private var pageGrid: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 18, alignment: .top)],
+                    alignment: .leading,
+                    spacing: 18
+                ) {
+                    ForEach(model.overviewPages, id: \.self) { page in
+                        gridCell(page: page).id(page)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            }
+            .onAppear { proxy.scrollTo(currentPageIndex, anchor: .center) }
+            .onChange(of: model.spreadIndex) { _, _ in
+                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(currentPageIndex, anchor: .center) }
+            }
+        }
+    }
+
+    private var currentPageIndex: Int {
+        model.currentSpread?.pageIndices.first ?? 0
+    }
+
+    private func gridCell(page: Int) -> some View {
+        let isCurrent = model.currentSpread?.pageIndices.contains(page) ?? false
+        return Button {
+            model.goToPage(page)
+        } label: {
+            VStack(spacing: 6) {
+                GridPageThumbnail(url: model.pages[page])
+                    .overlay(alignment: .topTrailing) { hitBadge(forPageIndex: page) }
+                    .overlay {
+                        if isCurrent {
+                            RoundedRectangle(cornerRadius: 5)
+                                .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                        }
+                    }
+                Text("\(page + 1)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isCurrent ? .black : .white.opacity(0.5))
+                    .frame(minWidth: 20)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(isCurrent ? Color.accentColor : .clear, in: Capsule())
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func hitBadge(forPageIndex page: Int) -> some View {
+        if let count = model.hitsByPage[page], count > 0 {
+            Text("\(count)")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(.black)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(Color(red: 1, green: 0.85, blue: 0.1), in: Capsule())
+                .padding(3)
+        }
+    }
+
     private func spreadThumbnail(at index: Int) -> some View {
         let isCurrent = index == model.spreadIndex
         return Button {
@@ -266,6 +342,32 @@ struct ReaderControlsPanel: View {
 }
 
 // MARK: - Thumbnail
+
+/// A page in the grid: sized by the column, height following the page.
+private struct GridPageThumbnail: View {
+    let url: URL
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.white.opacity(0.1)
+                    .aspectRatio(0.7, contentMode: .fit)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .shadow(color: .black.opacity(0.4), radius: 6, y: 3)
+        .task(id: url) {
+            image = await ThumbnailCache.shared.thumbnail(for: url)
+        }
+    }
+}
 
 /// A page at thumbnail size — nothing added around it; a page is white on its own.
 private struct PageThumbnail: View {
