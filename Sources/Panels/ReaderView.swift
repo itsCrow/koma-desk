@@ -93,10 +93,14 @@ struct ReaderView: View {
             press.modifiers.contains(.shift) ? model.goBack() : model.goForward()
             return .handled
         }
-        .onChange(of: model.isScriptEditing) { _, editing in
-            // The reader's own focus yields to the text view and takes over
-            // again when it's done.
-            if editing { focused = false } else { focused = true }
+        // Never steer SwiftUI focus from AppKit responder changes: setting the
+        // focus state false makes SwiftUI clear the window's first responder —
+        // throwing out the text view that just took it — and then hand focus
+        // to the last AppKit responder it remembers. The reader takes focus
+        // back only on the writer's own actions: a tap on the page, closing
+        // the controls, hiding the pane.
+        .onChange(of: model.showsScript) { _, shows in
+            if !shows { focused = true }
         }
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first(where: {
