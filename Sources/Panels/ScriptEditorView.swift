@@ -465,7 +465,14 @@ struct ScriptEditorView: NSViewRepresentable {
                 popover.appearance = NSAppearance(named: .darkAqua)
                 popover.contentViewController = NSHostingController(
                     rootView: SpanPreview(label: self.project.manifest.label(for: span)))
-                popover.show(relativeTo: rect, of: textView, preferredEdge: .minX)
+                // Below the block, against the margin — the same place every
+                // time. Anchoring to the left of the rule put it out over the
+                // comic pages, and it flipped back over the writing whenever
+                // there wasn't room. Clamped to what's on screen so a block
+                // taller than the pane can't fling it somewhere odd.
+                var anchor = rect.intersection(textView.visibleRect)
+                if anchor.isNull || anchor.isEmpty { anchor = rect }
+                popover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
                 self.preview = popover
             }
         }
