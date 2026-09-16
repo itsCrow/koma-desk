@@ -207,6 +207,12 @@ final class ReaderModel {
             errorMessage = "“\(item.url.lastPathComponent)” isn’t where it was. If it moved, add its new folder to the library."
             return
         }
+        // What's on screen until the new one actually opens. A failed open
+        // must put these back: the pages stay as they were, so the model has
+        // to keep saying which comic they belong to, or the next citation is
+        // recorded against a comic that never opened.
+        let previousItem = self.item
+        let previousSeries = self.series
         self.item = item
         self.series = library.series(containing: item)
         isLoading = true
@@ -231,6 +237,9 @@ final class ReaderModel {
             case .failure(let error):
                 isLoading = false
                 pendingStart = nil
+                pendingJump = nil
+                self.item = previousItem
+                self.series = previousSeries
                 errorMessage = Self.describe(error, for: url)
             }
         }

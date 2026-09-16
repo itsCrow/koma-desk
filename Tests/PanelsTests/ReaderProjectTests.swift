@@ -344,6 +344,44 @@ struct ReaderProjectTests {
         #expect(await Self.wait(seconds: 5) { (try? ProjectStore.load(project.url))?.manifest.citations.count == 2 })
     }
 
+    @Test("A comic that won't open leaves the model on the one still showing")
+    func failedOpenKeepsIdentity() async throws {
+        guard let path = Self.comicPath else {
+            withKnownIssue("Set PANELS_TEST_CBR to run.") { Issue.record("skipped") }
+            return
+        }
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+
+        model.addToLibrary(URL(fileURLWithPath: path))
+        #expect(await Self.wait { model.hasComic })
+        let good = try #require(model.item)
+        let series = try #require(model.series)
+
+        // A truncated download — half the collection is in this state, and it
+        // is exactly what produced a citation pointing at the wrong comic.
+        let broken = scratch.root.appendingPathComponent("Broken v01.cbz")
+        try Data(repeating: 0, count: 4096).write(to: broken)
+        let brokenItem = LibraryItem(url: broken, series: "Broken", volume: 1, chapter: nil,
+                                     title: "Vol. 1", arc: nil, fileSize: 4096)
+
+        model.open(item: brokenItem)
+        #expect(await Self.wait(seconds: 10) { model.errorMessage != nil })
+
+        // The good comic's pages never left the screen, so it is still what
+        // the model is showing — and what a citation would name.
+        #expect(model.hasComic)
+        #expect(model.item?.id == good.id)
+        #expect(model.series?.name == series.name)
+
+        model.newProject(named: "After the failure")
+        let project = try #require(model.project)
+        _ = model.copyCitation()
+        #expect(project.manifest.citations.first?.itemID == good.id)
+        #expect(project.manifest.items.map(\.itemID) == [good.id])
+    }
+
     @Test("Shots come back in script order, and a deleted chip leaves an unused citation")
     func shotOrder() throws {
         let scratch = try Scratch()
