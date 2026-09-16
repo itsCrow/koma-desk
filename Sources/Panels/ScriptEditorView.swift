@@ -664,7 +664,7 @@ final class ScriptTextView: NSTextView {
             path.lineWidth = 1
             path.stroke()
             let rule = NSBezierPath(roundedRect: rule(beside: box), xRadius: 1.5, yRadius: 1.5)
-            NSColor.systemOrange.withAlphaComponent(hovered ? 1 : 0.6).setFill()
+            Palette.pageRange.withAlphaComponent(hovered ? 1 : 0.6).setFill()
             rule.fill()
         }
     }
@@ -732,15 +732,15 @@ final class ScriptTextView: NSTextView {
         // are what say which block this is.
         ScriptStyle.background.setFill()
         card.fill()
-        NSColor.systemOrange.withAlphaComponent(0.16).setFill()
+        Palette.pageRange.withAlphaComponent(0.16).setFill()
         card.fill()
-        NSColor.systemOrange.withAlphaComponent(0.9).setStroke()
+        Palette.pageRange.withAlphaComponent(0.9).setStroke()
         card.lineWidth = 1
         card.stroke()
 
         let range = NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
-            .foregroundColor: NSColor.systemOrange,
+            .foregroundColor: Palette.pageRange,
         ])
         let hint = NSAttributedString(string: "Click to open these pages", attributes: [
             .font: NSFont.systemFont(ofSize: 11),
@@ -933,10 +933,10 @@ enum ScriptStyle {
     /// Orange, so a block of writing about a range never reads as a citation
     /// chip, which is the accent colour.
     static func spanFill() -> NSColor {
-        NSColor.systemOrange.withAlphaComponent(0.10)
+        Palette.pageRange.withAlphaComponent(0.10)
     }
     static func spanStroke(hovered: Bool) -> NSColor {
-        NSColor.systemOrange.withAlphaComponent(hovered ? 0.75 : 0.35)
+        Palette.pageRange.withAlphaComponent(hovered ? 0.75 : 0.35)
     }
 
     enum Paragraph: String {
@@ -945,7 +945,7 @@ enum ScriptStyle {
 
     /// Notes are teal: the chips are the accent blue and page ranges are
     /// orange, so an aside needs a third voice of its own.
-    static let noteColour = NSColor.systemTeal
+    static let noteColour = Palette.note
     /// The bar a note sits behind, and the room made for it by `headIndent`.
     static let noteIndent: CGFloat = 14
 
@@ -1025,7 +1025,7 @@ private final class CitationChipCell: NSTextAttachmentCell {
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {
         let rect = cellFrame.insetBy(dx: 1, dy: 0.5)
         let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
-        NSColor.controlAccentColor.setFill()
+        Palette.citation.setFill()
         path.fill()
 
         let name = chip?.thumbnail == nil ? "doc.text" : "photo"
@@ -1034,12 +1034,14 @@ private final class CitationChipCell: NSTextAttachmentCell {
         let iconSize = NSSize(width: 11, height: 11)
         let iconRect = NSRect(x: rect.midX - iconSize.width / 2, y: rect.midY - iconSize.height / 2,
                               width: iconSize.width, height: iconSize.height)
+        // Dark on amber. The glyph was white, which only read because the
+        // system accent behind it was usually a dark blue; on a light fill it
+        // washes out.
         NSGraphicsContext.current?.saveGraphicsState()
-        NSColor.white.set()
         let tinted = icon.copy() as! NSImage
         tinted.isTemplate = true
         tinted.lockFocus()
-        NSColor.white.set()
+        Palette.onLight.set()
         NSRect(origin: .zero, size: tinted.size).fill(using: .sourceAtop)
         tinted.unlockFocus()
         tinted.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)

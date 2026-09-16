@@ -280,7 +280,7 @@ struct ReaderControlsPanel: View {
                 .foregroundStyle(.black)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 2)
-                .background(Color(red: 1, green: 0.85, blue: 0.1), in: Capsule())
+                .background(Palette.searchHitColor, in: Capsule())
                 .padding(3)
         }
     }
@@ -301,7 +301,7 @@ struct ReaderControlsPanel: View {
                                         .foregroundStyle(.black)
                                         .padding(.horizontal, 5)
                                         .padding(.vertical, 2)
-                                        .background(Color(red: 1, green: 0.85, blue: 0.1), in: Capsule())
+                                        .background(Palette.searchHitColor, in: Capsule())
                                         .padding(3)
                                 }
                             }

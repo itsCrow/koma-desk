@@ -601,7 +601,7 @@ private final class CaptureOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard isActive else { return }
         let size = bounds.size
-        let accent = NSColor.systemOrange
+        let accent = Palette.citation
         let line = max(size.height * 0.002, 1.5)
 
         if let marquee {
@@ -715,13 +715,13 @@ private final class HighlightOverlayView: NSView {
             path.move(to: NSPoint(x: polygon[0].x * size.width, y: polygon[0].y * size.height))
             for p in polygon.dropFirst() { path.line(to: NSPoint(x: p.x * size.width, y: p.y * size.height)) }
             path.close()
-            NSColor.controlAccentColor.withAlphaComponent(0.16).setFill()
+            Palette.citation.withAlphaComponent(0.16).setFill()
             path.fill()
             path.lineWidth = max(size.height * 0.003, 2) * 3
             NSColor.white.withAlphaComponent(0.85).setStroke()
             path.stroke()
             path.lineWidth = max(size.height * 0.003, 2)
-            NSColor.controlAccentColor.setStroke()
+            Palette.citation.setStroke()
             path.stroke()
         }
         guard !drawn.isEmpty else { return }
@@ -734,9 +734,9 @@ private final class HighlightOverlayView: NSView {
                 height: box.height * size.height
             ).insetBy(dx: -size.width * 0.004, dy: -size.height * 0.003)
             let path = NSBezierPath(roundedRect: rect, xRadius: rect.height * 0.2, yRadius: rect.height * 0.2)
-            NSColor(calibratedRed: 1, green: 0.85, blue: 0.1, alpha: 0.38).setFill()
+            Palette.searchHit.withAlphaComponent(0.38).setFill()
             path.fill()
-            NSColor(calibratedRed: 1, green: 0.75, blue: 0, alpha: 0.9).setStroke()
+            Palette.searchHit.withAlphaComponent(0.9).setStroke()
             path.lineWidth = max(size.height * 0.0015, 1)
             path.stroke()
         }
