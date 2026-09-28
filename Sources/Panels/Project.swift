@@ -96,6 +96,23 @@ final class Project {
         return ScriptMarkdown.citationIDs(in: script).compactMap { byID[$0] }
     }
 
+    /// The script's sections — its headings, with their synopses — and the
+    /// shots in each, numbered once through the whole script. Empty when the
+    /// script has no headings: then there's nothing to group by.
+    var shotSections: [(section: ScriptSection, shots: [(number: Int, citation: Citation)])] {
+        let sections = ScriptMarkdown.outline(in: script)
+        guard sections.contains(where: { $0.title != nil }) else { return [] }
+        let byID = Dictionary(manifest.citations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var number = 0
+        return zip(sections, ScriptSection.firstAppearances(in: sections)).map { section, ids in
+            let shots = ids.compactMap { byID[$0] }.map { citation -> (number: Int, citation: Citation) in
+                number += 1
+                return (number, citation)
+            }
+            return (section, shots)
+        }
+    }
+
     /// The page ranges in the order their blocks appear in the script.
     var spansInScriptOrder: [PageSpan] {
         let byID = Dictionary(manifest.spans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

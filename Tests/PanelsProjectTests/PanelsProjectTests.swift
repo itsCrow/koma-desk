@@ -927,6 +927,12 @@ struct FountainLiteTests {
         #expect(opening.first?.citationIDs == ["c0zzzz"])
     }
 
+    @Test("A shot belongs to the section it first appears in")
+    func firstAppearances() {
+        let sections = ScriptMarkdown.outline(in: Self.sample)
+        #expect(ScriptSection.firstAppearances(in: sections) == [["c1abcd"], ["c2efgh"]])
+    }
+
     @Test("Plain text pasted in keeps every character, and gains structure only from structural lines")
     func fromPlainText() {
         let text = "# Act One\n= The setup\n[[check this]]\n> and this\nFive * three [is] {not} markup.\n\nINT. HOUSE"

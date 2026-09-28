@@ -1034,27 +1034,45 @@ final class ReaderModel {
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             var lines: [String] = ["\(project.name) — \(shots.count) shots", ""]
-            for (index, citation) in shots.enumerated() {
-                let number = String(format: "%02d", index + 1)
-                var filename = "\(number)_(no capture)"
-                if let source = project.captureURL(for: citation),
-                   FileManager.default.fileExists(atPath: source.path) {
-                    let stem = source.deletingPathExtension().lastPathComponent
-                        .replacingOccurrences(of: " ", with: "_")
-                    filename = "\(number)_\(stem).\(source.pathExtension)"
-                    let destination = folder.appendingPathComponent(filename)
-                    try? FileManager.default.removeItem(at: destination)
-                    try FileManager.default.copyItem(at: source, to: destination)
+            // Grouped under the script's own sections when it has them —
+            // written the way the script writes them, `# section` and
+            // `= synopsis`, so the file reads like the outline it is.
+            let sections = project.shotSections
+            let groups: [(header: [String], shots: [(number: Int, citation: Citation)])] = sections.isEmpty
+                ? [([], shots.enumerated().map { ($0.offset + 1, $0.element) })]
+                : sections.map { group in
+                    var header: [String] = []
+                    if let title = group.section.title {
+                        header.append(String(repeating: "#", count: max(1, group.section.level)) + " " + title)
+                    }
+                    if let synopsis = group.section.synopsis { header.append("= " + synopsis) }
+                    if group.shots.isEmpty { header.append("(no shots yet)") }
+                    return (header, group.shots)
                 }
-                lines.append("\(number). \(citation.text)")
-                lines.append("    \(filename)")
-                if let span = project.span(containing: citation.id) {
-                    lines.append("    in \(span.text)")
+            for group in groups {
+                if !group.header.isEmpty { lines += group.header + [""] }
+                for (shotNumber, citation) in group.shots {
+                    let number = String(format: "%02d", shotNumber)
+                    var filename = "\(number)_(no capture)"
+                    if let source = project.captureURL(for: citation),
+                       FileManager.default.fileExists(atPath: source.path) {
+                        let stem = source.deletingPathExtension().lastPathComponent
+                            .replacingOccurrences(of: " ", with: "_")
+                        filename = "\(number)_\(stem).\(source.pathExtension)"
+                        let destination = folder.appendingPathComponent(filename)
+                        try? FileManager.default.removeItem(at: destination)
+                        try FileManager.default.copyItem(at: source, to: destination)
+                    }
+                    lines.append("\(number). \(citation.text)")
+                    lines.append("    \(filename)")
+                    if let span = project.span(containing: citation.id) {
+                        lines.append("    in \(span.text)")
+                    }
+                    if let context = project.context(of: citation.id), !context.isEmpty {
+                        lines.append("    \(context)")
+                    }
+                    lines.append("")
                 }
-                if let context = project.context(of: citation.id), !context.isEmpty {
-                    lines.append("    \(context)")
-                }
-                lines.append("")
             }
             // The ranges the script covers, whether or not a panel was ever
             // captured from them — what to put on screen between the shots.

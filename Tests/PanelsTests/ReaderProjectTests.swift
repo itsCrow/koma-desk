@@ -895,6 +895,37 @@ struct ReaderProjectTests {
         #expect(ScriptMarkdown.parse(project.script).last == .paragraph([.text("Five * three is fifteen. More words.")]))
     }
 
+    @Test("The shot list follows the script's sections, numbered straight through")
+    func shotSections() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (_, _, project) = try editor(script: "", in: scratch)
+        for id in ["c1abcd", "c2efgh", "c3ijkm"] {
+            project.add(Citation(id: id, itemID: "b.cbz|1", pageIndex: 0, pageNumbers: [1], text: "Berserk, p. \(id)"))
+        }
+        // No headings: nothing to group by, and the list stays flat.
+        project.script = "One [a](panels://cite/c1abcd)."
+        #expect(project.shotSections.isEmpty)
+
+        project.script = """
+        Cold open [a](panels://cite/c1abcd).
+        # Act One
+        = The setup
+        Then [b](panels://cite/c2efgh) and [a again](panels://cite/c1abcd).
+        # Act Two
+        = Nothing cited yet
+        ## Coda
+        Last [c](panels://cite/c3ijkm).
+        """
+        let sections = project.shotSections
+        #expect(sections.map(\.section.title) == [nil, "Act One", "Act Two", "Coda"])
+        #expect(sections.map(\.section.synopsis) == [nil, "The setup", "Nothing cited yet", nil])
+        #expect(sections.map { $0.shots.map(\.number) } == [[1], [2], [], [3]])
+        #expect(sections.map { $0.shots.map(\.citation.id) } == [["c1abcd"], ["c2efgh"], [], ["c3ijkm"]])
+        // The same order and count the flat list and the export always had.
+        #expect(sections.flatMap { $0.shots.map(\.citation.id) } == project.citationsInScriptOrder.map(\.id))
+    }
+
     @Test("Formatting a paragraph inside a block does not knock it out of the block")
     func headingKeepsTheBlock() throws {
         let scratch = try Scratch()

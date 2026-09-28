@@ -599,4 +599,14 @@ public struct ScriptSection: Equatable, Sendable {
         self.synopsis = synopsis
         self.citationIDs = citationIDs
     }
+
+    /// Each section's shots, counting a citation only where it first
+    /// appears — the shot list's numbering runs once through the script, so
+    /// a panel cited again later isn't a second shot.
+    public static func firstAppearances(in sections: [ScriptSection]) -> [[String]] {
+        var seen = Set<String>()
+        return sections.map { section in
+            section.citationIDs.filter { seen.insert($0).inserted }
+        }
+    }
 }

@@ -242,16 +242,20 @@ struct ShotListView: View {
                         .foregroundStyle(.white.opacity(0.5))
                         .padding(20)
                 }
-                ForEach(Array(shots.enumerated()), id: \.element.id) { index, citation in
-                    ShotRow(
-                        number: index + 1,
-                        label: project.manifest.label(for: citation),
-                        context: project.context(of: citation.id),
-                        image: project.captureURL(for: citation)
-                    ) {
-                        model.revealShot(citation)
+                let sections = project.shotSections
+                if sections.isEmpty {
+                    ForEach(Array(shots.enumerated()), id: \.element.id) { index, citation in
+                        row(number: index + 1, citation: citation)
                     }
-                    Divider().overlay(.white.opacity(0.07))
+                } else {
+                    // The script's own outline: each section's heading and
+                    // synopsis over the shots in it, numbered straight through.
+                    ForEach(Array(sections.enumerated()), id: \.offset) { _, group in
+                        SectionHeader(section: group.section, isEmpty: group.shots.isEmpty)
+                        ForEach(group.shots, id: \.citation.id) { shot in
+                            row(number: shot.number, citation: shot.citation)
+                        }
+                    }
                 }
 
                 let unused = project.unusedCitations
@@ -295,6 +299,53 @@ struct ShotListView: View {
             }
         }
         .background(ScriptStyle.backgroundColor)
+    }
+
+    @ViewBuilder
+    private func row(number: Int, citation: Citation) -> some View {
+        ShotRow(
+            number: number,
+            label: project.manifest.label(for: citation),
+            context: project.context(of: citation.id),
+            image: project.captureURL(for: citation)
+        ) {
+            model.revealShot(citation)
+        }
+        Divider().overlay(.white.opacity(0.07))
+    }
+}
+
+/// A section of the script over its shots: the heading, and the synopsis
+/// written under it — Fountain-lite's outline, where the shots are listed.
+private struct SectionHeader: View {
+    let section: ScriptSection
+    /// No shots in it yet — worth saying, since that's a gap in the video.
+    let isEmpty: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(section.title ?? "Opening")
+                .font(.system(size: section.level <= 1 ? 14 : 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(section.title == nil ? 0.55 : 0.9))
+                .lineLimit(2)
+            if let synopsis = section.synopsis {
+                Text(synopsis)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(3)
+            }
+            if isEmpty {
+                Text("No shots yet")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .padding(.top, 2)
+            }
+        }
+        .padding(.leading, section.level >= 2 ? 26 : 14)
+        .padding(.trailing, 14)
+        .padding(.top, 16)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
