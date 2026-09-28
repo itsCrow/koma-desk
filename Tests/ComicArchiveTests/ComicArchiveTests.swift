@@ -87,6 +87,12 @@ struct SpreadTests {
         #expect(buildSpreads(pageCount: 0, isWide: []).isEmpty)
     }
 
+    @Test("Single-page mode never pairs, whatever the page count")
+    func singlePage() {
+        #expect(buildSinglePageSpreads(pageCount: 5).map(\.pageIndices) == [[0], [1], [2], [3], [4]])
+        #expect(buildSinglePageSpreads(pageCount: 0).isEmpty)
+    }
+
     @Test("Mismatched isWide array doesn't trip the bounds checks")
     func shortFlags() {
         // Defensive: the flags come from a separate scan and could lag behind.

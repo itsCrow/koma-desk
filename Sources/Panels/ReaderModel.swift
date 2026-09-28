@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 import UniformTypeIdentifiers
 import ComicArchive
 import ComicLibrary
@@ -8,6 +9,7 @@ import PanelsFormat
 import PageSearch
 import PageCapture
 import PanelsProject
+import RemoteComicSource
 
 /// Which side of the pages the script pane sits on.
 enum ScriptPlacement: String, CaseIterable {
@@ -25,6 +27,40 @@ enum ScriptPlacement: String, CaseIterable {
     var isVertical: Bool { self == .top || self == .bottom }
 }
 
+/// How the projects browser lays out what it's showing.
+enum ProjectsViewMode: String {
+    case grid, list
+}
+
+/// How many pages the reader shows together — independent of whether that's
+/// turned horizontally or scrolled vertically, and independent of
+/// `ReadingDirection`, which only says which side is forward and stops
+/// applying once there's no "side" at all (Single Page, either orientation).
+enum PageLayout: String, CaseIterable {
+    case twoPage, singlePage
+
+    var label: String {
+        switch self {
+        case .twoPage: return "Two-Page Spread"
+        case .singlePage: return "Single Page"
+        }
+    }
+}
+
+/// How the reader moves between pages — turned horizontally, or scrolled
+/// continuously top to bottom. Mixes freely with `PageLayout`: a vertical
+/// scroll can show one page per row or two side by side, same as horizontal.
+enum ReadingOrientation: String, CaseIterable {
+    case horizontal, vertical
+
+    var label: String {
+        switch self {
+        case .horizontal: return "Horizontal"
+        case .vertical: return "Vertical Scroll"
+        }
+    }
+}
+
 /// Where to land when the next item opens as part of reading straight through.
 enum ItemStart {
     case beginning, end
@@ -38,9 +74,33 @@ enum CaptureShape {
     case polygon([CGPoint])
 }
 
-/// The two halves of the home screen.
+/// The sidebar destinations on the home screen.
 enum HomeTab: String {
-    case library, projects
+    case reading, library, projects
+}
+
+/// How the script pane shows the writing. Writer edits it, full fidelity.
+/// Voice reads it clean — no notes, chips, or page-range highlighting, for
+/// reading aloud. Editor is read-only like Voice, but full fidelity like
+/// Writer, plus it's where beats — the script's sections — live.
+enum ScriptMode: String, CaseIterable, Equatable, Sendable {
+    case writer, voice, editor
+
+    var label: String {
+        switch self {
+        case .writer: return "Writer"
+        case .voice: return "Voice"
+        case .editor: return "Editor"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .writer: return "pencil"
+        case .voice: return "book"
+        case .editor: return "checklist"
+        }
+    }
 }
 
 extension ReadingDirection {
@@ -62,6 +122,14 @@ extension ItemRef {
     }
 }
 
+extension ComicIdentity {
+    /// An item's identity as the library already knows it — works the same
+    /// for a local file and a remote chapter, with no filename to parse.
+    init(_ item: LibraryItem) {
+        self.init(series: item.series, volume: item.volume, chapter: item.chapter, chapterTitle: item.title)
+    }
+}
+
 @Observable
 @MainActor
 final class ReaderModel {
@@ -74,6 +142,9 @@ final class ReaderModel {
     private(set) var spreads: [Spread] = []
     private(set) var warning: String?
     private(set) var isLoading = false
+    /// Set while a remote chapter's pages are downloading: (downloaded, total).
+    /// A bare spinner reads as a hang for a multi-page download.
+    private(set) var remoteFetchProgress: (done: Int, total: Int)?
     /// Width-to-height of a two-page spread of the open comic. The window keeps
     /// this shape, which is what lets a spread fill it with no bars either side.
     private(set) var spreadAspect: CGFloat?
@@ -101,16 +172,40 @@ final class ReaderModel {
     /// The home screen — library and projects — is showing. It stands in for
     /// the pages when nothing is open, and lies over them when something is.
     var showsHome = false
-    var homeTab: HomeTab = .library
+    var homeTab: HomeTab = .reading
+    /// What the home sidebar's search field holds — every tab filters by it.
+    var homeSearch = ""
+    /// ⌘F while home is showing: the search field should take the keyboard.
+    var wantsHomeSearchFocus = false
+    /// Home fills the window when nothing's open, and lies over the pages
+    /// when asked for.
+    var isHomeVisible: Bool { showsHome || !hasComic }
     /// The series whose page the library half of home is showing, if any.
     var browsingSeries: String?
-    /// ⌘N: the projects half should offer the name field straight away.
+    /// "New Project…" should show its dialog.
     var wantsNewProject = false
+    /// Set by a caller that already knows which series the new project is
+    /// about — read once by the dialog, then irrelevant until set again.
+    var newProjectSeriesOverride: String?
+    /// The library's import bar should take focus.
+    /// "Import from Link…" is showing its sheet.
+    var isImportingLink = false
+    /// How the library's series are ordered.
+    var librarySort: LibrarySort = LibrarySort(rawValue: UserDefaults.standard.string(forKey: "PanelsLibrarySort") ?? "") ?? .recent {
+        didSet { UserDefaults.standard.set(librarySort.rawValue, forKey: "PanelsLibrarySort") }
+    }
+    /// The "Open URL…" sheet is resolving what's at the link.
+    private(set) var isAddingRemoteSource = false
     /// The script pane has the keyboard: every reader key stands down.
     var isScriptEditing = false
     /// The block of writing the cursor sits in, reported by the editor — what
     /// makes one key both start a range and end it.
     var spanAtCursor: String?
+    /// Whether any of the script is selected — what turns ⌘R from starting
+    /// a block into linking what's already written.
+    var hasScriptSelection = false
+    /// "Link to Page…" is asking which comic and pages — see `LinkPagesSheet`.
+    var linkingPages: LinkPagesRequest?
     /// Whether the cursor is in a note, so ⌘N can end one as well as start it.
     var isWritingNote = false
     /// Whether the script pane is shown when a project is open.
@@ -119,6 +214,14 @@ final class ReaderModel {
     }
     /// The script pane is showing the shot list rather than the writing.
     var showsShotList = false
+    /// The comic is hidden and the script pane takes the whole window, the
+    /// pages set aside for a stretch of uninterrupted writing.
+    var isFocusedWriting = false
+    /// Writer, Voice, or Editor — see `ScriptMode`.
+    var scriptMode: ScriptMode = .writer
+    /// The formatting at the cursor or across the selection, published by the
+    /// editor so the formatting toolbar's buttons can show which ones are on.
+    var selectionFormatting = ScriptSelectionFormatting()
     /// The controls panel is expanded into a grid filling the page area.
     var isOverviewExpanded = false
     /// The series' contents beside the pages.
@@ -127,6 +230,34 @@ final class ReaderModel {
     }
     var scriptPlacement: ScriptPlacement {
         didSet { UserDefaults.standard.set(scriptPlacement.rawValue, forKey: Self.scriptPlacementKey) }
+    }
+    /// How wide Editor mode's beat rail is — a real resizable sidebar, not a
+    /// fixed width, so it's persisted the same way `scriptPlacement` is.
+    /// Clamped by whoever sets it from a drag; kept unclamped here so a
+    /// narrower future minimum doesn't need a migration.
+    var beatRailWidth: CGFloat {
+        didSet { UserDefaults.standard.set(Double(beatRailWidth), forKey: Self.beatRailWidthKey) }
+    }
+    /// Where each beat's highlighted block currently sits in the script's own
+    /// content coordinates (its top, ignoring scroll) — published by
+    /// `ScriptTextView` so the beat rail can place each row at the same
+    /// height as its beat instead of just stacking them. Not persisted:
+    /// this is live geometry, recomputed on every layout pass.
+    var beatBoxTops: [String: CGFloat] = [:]
+    /// The script's total laid-out height, so the rail's own content area
+    /// can match it.
+    var scriptContentHeight: CGFloat = 0
+    /// How far the script is scrolled, so the rail can scroll the same
+    /// amount and stay lined up as the writer scrolls either pane.
+    var scriptScrollOffset: CGFloat = 0
+    /// Grid of cards, or a list of rows — how the projects browser shows
+    /// what's in the projects folder.
+    var projectsViewMode: ProjectsViewMode {
+        didSet { UserDefaults.standard.set(projectsViewMode.rawValue, forKey: Self.projectsViewModeKey) }
+    }
+    /// How projects are ordered within their series on the Projects tab.
+    var projectsSort: ProjectsSort = ProjectsSort(rawValue: UserDefaults.standard.string(forKey: "PanelsProjectsSort") ?? "") ?? .recent {
+        didSet { UserDefaults.standard.set(projectsSort.rawValue, forKey: "PanelsProjectsSort") }
     }
     /// Shapes to outline on pages after a jump, keyed by page file. Unit
     /// coords, top-left origin. Cleared after a moment.
@@ -159,9 +290,28 @@ final class ReaderModel {
             UserDefaults.standard.set(direction.rawValue, forKey: Self.directionKey)
         }
     }
+    /// Two pages at a time, or one — independent of which side is forward.
+    var pageLayout: PageLayout {
+        didSet {
+            guard pageLayout != oldValue else { return }
+            UserDefaults.standard.set(pageLayout.rawValue, forKey: Self.pageLayoutKey)
+            rebuildSpreadsForCurrentMode()
+        }
+    }
+    /// Turned horizontally, or scrolled vertically — independent of how many
+    /// pages a "spread" is (`pageLayout`).
+    var readingOrientation: ReadingOrientation {
+        didSet {
+            guard readingOrientation != oldValue else { return }
+            UserDefaults.standard.set(readingOrientation.rawValue, forKey: Self.readingOrientationKey)
+        }
+    }
 
     @ObservationIgnored private let cache = PageCache()
     @ObservationIgnored private var source: URL?
+    /// The open comic's identity — compared against a completed indexing
+    /// pass to tell whether the reader has since moved to a different comic.
+    @ObservationIgnored private var openIdentity: String?
     /// Pages that are wider than they are tall — double-page scans, shown alone.
     @ObservationIgnored private var wideFlags: [Bool] = []
     @ObservationIgnored private var pageIndexByURL: [URL: Int] = [:]
@@ -183,9 +333,13 @@ final class ReaderModel {
     @ObservationIgnored private var focusTask: Task<Void, Never>?
 
     private static let directionKey = "PanelsReadingDirection"
+    private static let pageLayoutKey = "PanelsPageLayout"
+    private static let readingOrientationKey = "PanelsReadingOrientation"
     private static let showsScriptKey = "PanelsShowsScript"
     private static let showsContentsKey = "PanelsShowsSeriesContents"
     private static let scriptPlacementKey = "PanelsScriptPlacement"
+    private static let projectsViewModeKey = "PanelsProjectsViewMode"
+    private static let beatRailWidthKey = "PanelsBeatRailWidth"
 
     init(library: Library = Library(), projects: ProjectLibrary = ProjectLibrary()) {
         self.library = library
@@ -193,10 +347,18 @@ final class ReaderModel {
         let stored = UserDefaults.standard.string(forKey: Self.directionKey)
         // Defaults to manga order.
         direction = stored.flatMap(ReadingDirection.init(rawValue:)) ?? .rightToLeft
+        pageLayout = UserDefaults.standard.string(forKey: Self.pageLayoutKey)
+            .flatMap(PageLayout.init(rawValue:)) ?? .twoPage
+        readingOrientation = UserDefaults.standard.string(forKey: Self.readingOrientationKey)
+            .flatMap(ReadingOrientation.init(rawValue:)) ?? .horizontal
         showsScript = UserDefaults.standard.object(forKey: Self.showsScriptKey) as? Bool ?? true
         showsContents = UserDefaults.standard.object(forKey: Self.showsContentsKey) as? Bool ?? true
         scriptPlacement = UserDefaults.standard.string(forKey: Self.scriptPlacementKey)
             .flatMap(ScriptPlacement.init(rawValue:)) ?? .right
+        let storedRailWidth = UserDefaults.standard.object(forKey: Self.beatRailWidthKey) as? Double
+        beatRailWidth = storedRailWidth.map { CGFloat($0) } ?? 150
+        projectsViewMode = UserDefaults.standard.string(forKey: Self.projectsViewModeKey)
+            .flatMap(ProjectsViewMode.init(rawValue:)) ?? .grid
     }
 
     var hasComic: Bool { !pages.isEmpty }
@@ -214,10 +376,12 @@ final class ReaderModel {
     /// where reading straight through the series has asked for.
     func open(item: LibraryItem) {
         guard !isLoading else { return }
-        guard FileManager.default.fileExists(atPath: item.url.path) else {
-            library.rescan()
-            errorMessage = "“\(item.url.lastPathComponent)” isn’t where it was. If it moved, add its new folder to the library."
-            return
+        if case .local = item.source {
+            guard FileManager.default.fileExists(atPath: item.url.path) else {
+                library.rescan()
+                errorMessage = "“\(item.url.lastPathComponent)” isn’t where it was. If it moved, add its new folder to the library."
+                return
+            }
         }
         // What's on screen until the new one actually opens. A failed open
         // must put these back: the pages stay as they were, so the model has
@@ -230,30 +394,63 @@ final class ReaderModel {
         isLoading = true
         errorMessage = nil
         warning = nil
-        let url = item.url
+        remoteFetchProgress = nil
 
         Task {
-            // The page scan reads metadata for every page in the comic, so it
-            // rides along with extraction rather than landing on the main actor.
-            let result = await Task.detached(priority: .userInitiated) {
-                Result { () -> (ComicArchive, [Bool], CGFloat?) in
-                    let comic = try ComicArchive.open(url)
-                    let sizes = comic.pages.map(pagePixelSize)
-                    return (comic, sizes.map(isWidePage), spreadAspectRatio(pageSizes: sizes))
-                }
-            }.value
+            let result: Result<OpenedComic, Error>
+            switch item.source {
+            case .local:
+                let url = item.url
+                // The page scan reads metadata for every page in the comic,
+                // so it rides along with extraction rather than landing on
+                // the main actor.
+                result = await Task.detached(priority: .userInitiated) {
+                    Result { () -> OpenedComic in
+                        let comic = try ComicArchive.open(url)
+                        let sizes = comic.pages.map(pagePixelSize)
+                        return OpenedComic(
+                            source: comic.source, pages: comic.pages, identity: comic.identity,
+                            warning: comic.warning?.message, title: comic.title,
+                            wideFlags: sizes.map(isWidePage), aspect: spreadAspectRatio(pageSizes: sizes),
+                            notesRecentDocument: true
+                        )
+                    }
+                }.value
+            case .manifest(let manifestURL, let chapterKey):
+                result = await fetchRemote(.manifest(manifestURL: manifestURL, chapterKey: chapterKey), item: item)
+            case .site(let site, let chapterURL):
+                result = await fetchRemote(.site(site: site, chapterURL: chapterURL), item: item)
+            }
 
             switch result {
-            case .success(let (comic, wideFlags, aspect)):
-                apply(comic, wideFlags: wideFlags, spreadAspect: aspect)
+            case .success(let opened):
+                apply(opened)
             case .failure(let error):
                 isLoading = false
+                remoteFetchProgress = nil
                 pendingStart = nil
                 pendingJump = nil
                 self.item = previousItem
                 self.series = previousSeries
-                errorMessage = Self.describe(error, for: url)
+                errorMessage = Self.describe(error, for: item)
             }
+        }
+    }
+
+    /// Downloads a remote chapter's pages, reporting progress as it goes.
+    private func fetchRemote(_ source: ChapterSource, item: LibraryItem) async -> Result<OpenedComic, Error> {
+        do {
+            let comic = try await RemoteComicSource.open(source) { [weak self] done, total in
+                Task { @MainActor in self?.remoteFetchProgress = (done, total) }
+            }
+            let sizes = comic.pages.map(pagePixelSize)
+            return .success(OpenedComic(
+                source: item.url, pages: comic.pages, identity: comic.identity, warning: comic.warning,
+                title: item.displayName, wideFlags: sizes.map(isWidePage), aspect: spreadAspectRatio(pageSizes: sizes),
+                notesRecentDocument: false
+            ))
+        } catch {
+            return .failure(error)
         }
     }
 
@@ -283,31 +480,101 @@ final class ReaderModel {
         }
     }
 
-    private static func describe(_ error: Error, for url: URL) -> String {
-        guard let archiveError = error as? ArchiveError else {
-            return "“\(url.lastPathComponent)” couldn’t be opened. \(error.localizedDescription)"
+    /// From the "Open URL…" sheet: reads a manifest or a known site's link,
+    /// adds its series to the library, and shows it.
+    func addRemoteSource(urlString: String) async {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), url.scheme?.hasPrefix("http") == true else {
+            errorMessage = "That doesn’t look like a web address."
+            return
         }
-        let headline = archiveError.errorDescription ?? "The comic couldn’t be opened."
-        if let reason = archiveError.failureReason {
-            return "\(headline)\n\n\(reason)"
+        isAddingRemoteSource = true
+        defer { isAddingRemoteSource = false }
+        do {
+            let seriesName = try await library.addRemoteSource(url)
+            isImportingLink = false
+            showsHome = true
+            homeTab = .library
+            browsingSeries = seriesName
+        } catch {
+            errorMessage = Self.describeRemoteSourceError(error)
         }
-        return headline
     }
 
-    private func apply(_ comic: ComicArchive, wideFlags scanned: [Bool], spreadAspect aspect: CGFloat?) {
+    private static func describeRemoteSourceError(_ error: Error) -> String {
+        if let remoteError = error as? RemoteSourceError {
+            return remoteError.errorDescription ?? "That link couldn’t be opened."
+        }
+        return "That link couldn’t be opened. \(error.localizedDescription)"
+    }
+
+    private static func describe(_ error: Error, for item: LibraryItem) -> String {
+        if let archiveError = error as? ArchiveError {
+            let headline = archiveError.errorDescription ?? "The comic couldn’t be opened."
+            if let reason = archiveError.failureReason {
+                return "\(headline)\n\n\(reason)"
+            }
+            return headline
+        }
+        if let remoteError = error as? RemoteSourceError {
+            return remoteError.errorDescription ?? "“\(item.displayName)” couldn’t be opened."
+        }
+        return "“\(item.url.lastPathComponent)” couldn’t be opened. \(error.localizedDescription)"
+    }
+
+    /// What opening a comic produces, whichever source it came from — a
+    /// local archive extracted to disk, or a remote chapter downloaded to
+    /// disk. Nothing past this point needs to know which.
+    private struct OpenedComic {
+        let source: URL
+        let pages: [URL]
+        let identity: String
+        let warning: String?
+        let title: String
+        let wideFlags: [Bool]
+        let aspect: CGFloat?
+        /// Only a real local file belongs in the Open Recent menu.
+        let notesRecentDocument: Bool
+    }
+
+    private func spreadsForCurrentMode(pageCount: Int, isWide: [Bool]) -> [Spread] {
+        // Pairing is purely about `pageLayout` — whether that's turned
+        // horizontally or scrolled vertically doesn't change which pages
+        // share a spread, only how the spread is shown.
+        switch pageLayout {
+        case .twoPage: return buildSpreads(pageCount: pageCount, isWide: isWide)
+        case .singlePage: return buildSinglePageSpreads(pageCount: pageCount)
+        }
+    }
+
+    /// The spread layout changed under an already-open comic — rebuild it
+    /// landing on the same page, rather than resetting to the start.
+    private func rebuildSpreadsForCurrentMode() {
+        guard hasComic else { return }
+        let currentPage = spreads.indices.contains(spreadIndex) ? spreads[spreadIndex].pageIndices.first ?? 0 : 0
+        spreads = spreadsForCurrentMode(pageCount: pages.count, isWide: wideFlags)
+        isRestoringPosition = true
+        spreadIndex = spreads.firstIndex { $0.pageIndices.contains(currentPage) } ?? 0
+        isRestoringPosition = false
+        if let item { library.noteSpreadCount(spreads.count, for: item) }
+    }
+
+    private func apply(_ comic: OpenedComic) {
         cache.removeAll()
         source = comic.source
+        openIdentity = comic.identity
         title = comic.title
         pages = comic.pages
-        wideFlags = scanned
-        spreadAspect = aspect
+        wideFlags = comic.wideFlags
+        spreadAspect = comic.aspect
         pageIndexByURL = Dictionary(uniqueKeysWithValues: pages.enumerated().map { ($1, $0) })
         searchQuery = ""
         searchHits = []
         hitsByPage = [:]
-        spreads = buildSpreads(pageCount: pages.count, isWide: wideFlags)
-        warning = comic.warning?.message
+        spreads = spreadsForCurrentMode(pageCount: pages.count, isWide: wideFlags)
+        warning = comic.warning
         isLoading = false
+        remoteFetchProgress = nil
 
         let restored = item.map { library.position(for: $0) } ?? 0
         isRestoringPosition = true
@@ -323,10 +590,13 @@ final class ReaderModel {
             // position is written here as well as in its didSet.
             library.setPosition(spreadIndex, for: item)
             library.noteRead(item)
+            library.noteSpreadCount(spreads.count, for: item)
         }
         prefetchNeighbours()
-        NSDocumentController.shared.noteNewRecentDocumentURL(comic.source)
-        startIndexing(comic)
+        if comic.notesRecentDocument {
+            NSDocumentController.shared.noteNewRecentDocumentURL(comic.source)
+        }
+        startIndexing(identity: comic.identity, pages: comic.pages)
 
         if let jump = pendingJump, jump.itemID == item?.id {
             pendingJump = nil
@@ -354,6 +624,8 @@ final class ReaderModel {
         pageIndexByURL = [:]
         cache.removeAll()
         source = nil
+        openIdentity = nil
+        remoteFetchProgress = nil
         title = nil
         pages = []
         spreads = []
@@ -485,6 +757,17 @@ final class ReaderModel {
         showsHome = true
     }
 
+    /// Closes the comic — and whatever project was open about it — outright,
+    /// landing on the app's main view. Not just the series it was reading,
+    /// the way the contents panel's own back arrow used to (that's still one
+    /// tap away, from Library).
+    func closeComicToHome() {
+        closeProject()
+        closeComic()
+        homeTab = .reading
+        browsingSeries = nil
+    }
+
     func goToStart() { spreadIndex = 0 }
 
     func goTo(spread index: Int) {
@@ -558,8 +841,8 @@ final class ReaderModel {
 
     /// "Berserk, Vol. 1, pp. 116–117" for whatever is on screen.
     var citation: String? {
-        guard let source, hasComic else { return nil }
-        return ComicIdentity(fileURL: source).citation(pages: visiblePages.map(\.number))
+        guard let item, hasComic else { return nil }
+        return ComicIdentity(item).citation(pages: visiblePages.map(\.number))
     }
 
     /// Cites what's on screen: into the script at the cursor when a project is
@@ -580,24 +863,37 @@ final class ReaderModel {
     // MARK: - Project
 
     /// ⌘N: bring up the projects half of home with the name field ready.
-    func requestNewProject() {
+    /// From the menu (⇧⌘N), or a "New Project…" button anywhere: a small
+    /// dialog over whatever's on screen, rather than a trip to the projects
+    /// list. A caller that already knows which series it means — a series'
+    /// own page, say — passes it explicitly, rather than leaving the sheet
+    /// to guess between "what's being read" and "what's being browsed".
+    func requestNewProject(series: String? = nil) {
+        newProjectSeriesOverride = series
         wantsNewProject = true
-        homeTab = .projects
+    }
+
+    /// From the menu, or ⇧⌘U: brings up the library with the sheet that
+    /// takes a link.
+    func requestOpenURL() {
+        homeTab = .library
         showsHome = true
+        isImportingLink = true
     }
 
     /// A new project about a series, opened. Made from the series' page, or
     /// from the projects list with a series chosen; with nothing chosen, the
     /// series being read.
-    func newProject(named name: String, series seriesName: String? = nil) {
+    func newProject(named name: String, series seriesName: String? = nil, targetWordCount: Int? = nil) {
         guard let seriesName = seriesName ?? series?.name ?? project?.manifest.series else {
             errorMessage = "A project is about one series. Add its comics to the library, then make the project from the series’ page."
             return
         }
         do {
-            let url = try projects.create(named: name, series: seriesName)
+            let url = try projects.create(named: name, series: seriesName, targetWordCount: targetWordCount)
             closeProject()
             adopt(try Project.open(url))
+            projects.noteLastOpened(url)
             showsHome = false
             if series?.name != seriesName, let found = library.series(named: seriesName) {
                 read(found)
@@ -621,6 +917,7 @@ final class ReaderModel {
             closeProject()
             adopt(next)
             projects.noteOpened(url)
+            projects.noteLastOpened(url)
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             showsHome = false
             if series?.name != next.manifest.series, let found = library.series(named: next.manifest.series) {
@@ -682,6 +979,8 @@ final class ReaderModel {
         project?.saveNow()
         project = nil
         pendingJump = nil
+        liveSpanID = nil
+        linkingPages = nil
         clearFocus()
     }
 
@@ -825,6 +1124,12 @@ final class ReaderModel {
         format(isWritingNote ? .body : .note)
     }
 
+    /// Bold, italic, a highlight, or a text-color override on the current
+    /// selection — see `format(_:)` for the whole-paragraph equivalent.
+    func formatInline(_ command: InlineCommand) {
+        project?.pendingInlineCommand = command
+    }
+
     /// Records a citation of the open item in the project and queues its
     /// chip for the script.
     private func recordCitation(pageIndex: Int, pageNumbers: [Int], panel: Int?,
@@ -839,8 +1144,18 @@ final class ReaderModel {
 
     // MARK: - Jumping to a citation
 
+    /// Clicking a citation or a page range is how the writer checks the
+    /// source it points at — showing that only makes sense back in the
+    /// normal split view, so a jump always leaves the extended writing area
+    /// first.
+    private func leaveFocusedWritingIfNeeded() {
+        guard isFocusedWriting else { return }
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) { isFocusedWriting = false }
+    }
+
     func jump(toCitation id: String) {
         guard let project, let citation = project.citation(id: id) else { return }
+        leaveFocusedWritingIfNeeded()
         if citation.itemID == item?.id {
             land(on: citation)
             return
@@ -856,9 +1171,21 @@ final class ReaderModel {
 
     // MARK: - Page ranges
 
-    /// One key does both: start a block here, or end the one being written.
+    /// The block ⌘R opened, the one reading on grows. A range linked to
+    /// writing after the fact names the pages the writer chose, and turning
+    /// pages with the caret inside it mustn't quietly stretch it.
+    @ObservationIgnored private var liveSpanID: String?
+
+    /// One key does all of it: with writing selected, link it to the pages
+    /// on screen; otherwise start a block here, or end the one being written.
     func togglePageRange() {
-        if spanAtCursor != nil { endPageRange() } else { startPageRange() }
+        if hasScriptSelection {
+            linkSelectionToPagesOnScreen()
+        } else if spanAtCursor != nil {
+            endPageRange()
+        } else {
+            startPageRange()
+        }
     }
 
     /// Whether the cursor is inside a block of writing.
@@ -868,28 +1195,112 @@ final class ReaderModel {
     /// the script takes the range now, and whatever is written next joins it,
     /// until the writer ends it.
     func startPageRange() {
-        guard let project, let item, let source, hasComic else { return }
-        let pages = visiblePages.map(\.number).sorted()
-        guard let first = pages.first, let last = pages.last else { return }
-        let span = PageSpan(itemID: item.id, firstPageIndex: first - 1, pageNumbers: [first, last],
-                            text: ComicIdentity(fileURL: source).citation(pages: pages))
-        // On record like a citation's comic, so the range can be named by its
-        // chapter rather than only by its pages.
-        project.register(ItemRef(item))
-        project.manifest.store(span)
+        guard let project, let item, hasComic,
+              let pages = pagesOnScreen, let span = storeSpan(item: item, pages: pages)
+        else { return }
+        liveSpanID = span.id
         project.pendingSpanCommand = .start(span)
         lastCaptureMessage = "Writing about \(project.manifest.label(for: span).short)"
     }
 
     /// Stops the block here: what's written next belongs to no range.
     func endPageRange() {
+        liveSpanID = nil
         project?.pendingSpanCommand = .end
         lastCaptureMessage = "Range ended"
     }
 
     /// Takes the range off the block of writing at the cursor.
     func removePageRange() {
+        if spanAtCursor == liveSpanID { liveSpanID = nil }
         project?.pendingSpanCommand = .remove
+    }
+
+    /// The first and last page of the spread on screen.
+    private var pagesOnScreen: ClosedRange<Int>? {
+        let pages = visiblePages.map(\.number)
+        guard let first = pages.min(), let last = pages.max() else { return nil }
+        return first...last
+    }
+
+    /// "pp. 42–43" for the spread on screen, for a menu item to say what it
+    /// would link to.
+    var pagesOnScreenPhrase: String? {
+        guard hasComic, let pages = pagesOnScreen else { return nil }
+        return ReferenceLabel.pagePhrase([pages.lowerBound, pages.upperBound])
+    }
+
+    /// Makes (or, given an id, remakes) the range for these pages of an item
+    /// and puts it on record — every way a range is made goes through here.
+    @discardableResult
+    private func storeSpan(item: LibraryItem, pages: ClosedRange<Int>, id: String? = nil) -> PageSpan? {
+        guard let project else { return nil }
+        let numbers = [pages.lowerBound, pages.upperBound]
+        let span = PageSpan(id: id ?? ProjectManifest.makeID(), itemID: item.id,
+                            firstPageIndex: pages.lowerBound - 1, pageNumbers: numbers,
+                            text: ComicIdentity(item).citation(pages: numbers))
+        // On record like a citation's comic, so the range can be named by its
+        // chapter rather than only by its pages.
+        project.register(ItemRef(item))
+        project.manifest.store(span)
+        return span
+    }
+
+    /// Links the selected writing to the pages on screen — or `selection`,
+    /// when the right-click that asked saw a different one.
+    func linkSelectionToPagesOnScreen(selection: NSRange? = nil) {
+        guard let project, let item, hasComic,
+              let pages = pagesOnScreen, let span = storeSpan(item: item, pages: pages)
+        else { return }
+        project.pendingSpanCommand = .link(span, selection: selection)
+        lastCaptureMessage = "Linked to \(project.manifest.label(for: span).short)"
+    }
+
+    /// Asks which comic and pages: for the selected writing, or — given a
+    /// range's id — to change the pages an existing range points at.
+    func beginLinkingPages(selection: NSRange? = nil, changing spanID: String? = nil) {
+        guard let project else { return }
+        let existing = spanID.flatMap { project.manifest.span(id: $0) }
+        let pages = existing.map { ReferenceLabel.pagePhrase($0.pageNumbers) }
+            ?? pagesOnScreenPhrase
+            ?? ""
+        linkingPages = LinkPagesRequest(
+            selection: selection, changingSpanID: existing?.id,
+            itemID: existing?.itemID ?? defaultLinkItem?.id,
+            pages: pages.replacingOccurrences(of: "pp. ", with: "").replacingOccurrences(of: "p. ", with: ""))
+    }
+
+    /// The comics a range can point at: the project's series, and whatever
+    /// is open if it's from somewhere else.
+    var linkCandidates: [LibraryItem] {
+        guard let project else { return [] }
+        var items = library.series(named: project.manifest.series)?.items ?? []
+        if let item, !items.contains(where: { $0.id == item.id }) { items.insert(item, at: 0) }
+        return items
+    }
+
+    /// What "Link to Page…" suggests: the comic that's open, or else the
+    /// one last cited.
+    private var defaultLinkItem: LibraryItem? {
+        if let item { return item }
+        guard let project else { return nil }
+        let recent = (project.manifest.spans.map { ($0.date, $0.itemID) }
+                      + project.manifest.citations.map { ($0.date, $0.itemID) })
+            .max { $0.0 < $1.0 }
+        return recent.flatMap { library.item(id: $0.1) }
+    }
+
+    /// The sheet's answer. A new range goes on the writing the request was
+    /// made for; a changed one keeps its id, so the writing needn't change.
+    func finishLinkingPages(_ request: LinkPagesRequest, item: LibraryItem, pages: ClosedRange<Int>) {
+        linkingPages = nil
+        guard let project, let span = storeSpan(item: item, pages: pages, id: request.changingSpanID) else { return }
+        if request.changingSpanID == nil {
+            project.pendingSpanCommand = .link(span, selection: request.selection)
+            lastCaptureMessage = "Linked to \(project.manifest.label(for: span).short)"
+        } else {
+            lastCaptureMessage = "Now \(project.manifest.label(for: span).short)"
+        }
     }
 
     /// Reading on while a block is being written grows the block's range with
@@ -901,12 +1312,12 @@ final class ReaderModel {
     /// the start back when that is what's wanted.
     private func followReadingWhileWriting() {
         guard !isRestoringPosition, let project, let item, hasComic,
-              let id = spanAtCursor, var span = project.manifest.span(id: id),
-              span.itemID == item.id, let source
+              let id = spanAtCursor, id == liveSpanID, var span = project.manifest.span(id: id),
+              span.itemID == item.id
         else { return }
         guard let reached = visiblePages.map(\.number).max(), reached > span.lastPage else { return }
         span.pageNumbers = [span.firstPage, reached]
-        span.text = ComicIdentity(fileURL: source).citation(pages: [span.firstPage, reached])
+        span.text = ComicIdentity(item).citation(pages: [span.firstPage, reached])
         project.manifest.store(span)
         lastCaptureMessage = "Now \(project.manifest.label(for: span).short)"
     }
@@ -914,7 +1325,7 @@ final class ReaderModel {
     /// Stretches the block the cursor is in to the page now on screen — you
     /// read on while writing about the same beat.
     func extendPageRange() {
-        guard let project, let item, let source, hasComic,
+        guard let project, let item, hasComic,
               let id = spanAtCursor, var span = project.manifest.span(id: id)
         else { return }
         // Pages only mean anything inside one comic. Reading on into the next
@@ -932,7 +1343,7 @@ final class ReaderModel {
         // Reading *back* moves the start, and the page the margin rule opens
         // has to move with it.
         span.firstPageIndex = first - 1
-        span.text = ComicIdentity(fileURL: source).citation(pages: [first, last])
+        span.text = ComicIdentity(item).citation(pages: [first, last])
         project.manifest.store(span)
         lastCaptureMessage = "Now \(project.manifest.label(for: span).short)"
     }
@@ -948,6 +1359,7 @@ final class ReaderModel {
     /// Brings the pages a block of writing is about back on screen.
     func jump(toSpan id: String) {
         guard let project, let span = project.manifest.span(id: id) else { return }
+        leaveFocusedWritingIfNeeded()
         guard let target = library.item(id: span.itemID) else {
             errorMessage = "The comic this range points at isn’t in your library. Add the folder it’s in and it will open."
             return
@@ -1023,14 +1435,14 @@ final class ReaderModel {
     /// transparent. If the shape sits inside a detected panel, the citation
     /// names that panel.
     func capture(page pageURL: URL, shape: CaptureShape) {
-        guard let source, let pageIndex = pageIndexByURL[pageURL] else { return }
+        guard let source, let item, let pageIndex = pageIndexByURL[pageURL] else { return }
         guard let project else {
             lastCaptureMessage = "Captures belong to a project — make or open one first"
             return
         }
         let folder = project.capturesFolder
         let panel = panelNumber(enclosing: shape, on: pageURL)
-        let identity = ComicIdentity(fileURL: source)
+        let identity = ComicIdentity(item)
         let pageNumber = pageIndex + 1
         let citation = identity.citation(pages: [pageNumber], panel: panel)
 
@@ -1177,11 +1589,9 @@ final class ReaderModel {
     /// one page at a time at low priority so it never contends with the page
     /// decodes that keep turns instant. Saves as it goes, so a quit mid-way
     /// resumes rather than restarts.
-    private func startIndexing(_ comic: ComicArchive) {
+    private func startIndexing(identity: String, pages: [URL]) {
         indexingTask?.cancel()
         let store = indexStore
-        let identity = comic.identity
-        let pages = comic.pages
         let initial = store.load(identity: identity, pageCount: pages.count)
             ?? PageTextIndex(pageCount: pages.count)
         textIndex = initial
@@ -1202,7 +1612,7 @@ final class ReaderModel {
                 }
                 let snapshot = index
                 await MainActor.run { [weak self] in
-                    guard let self, self.source == comic.source else { return }
+                    guard let self, self.openIdentity == identity else { return }
                     self.textIndex = snapshot
                     // A search typed while pages were still being read picks
                     // up the new ones as they land.

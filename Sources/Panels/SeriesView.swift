@@ -1,198 +1,212 @@
 import SwiftUI
 import ComicLibrary
 
-/// One series: what there is of it, how far it's been read, and the
-/// projects about it.
+/// One series: where the reader is up to in it, the projects about it, and
+/// everything there is of it, with what's been read marked.
 struct SeriesView: View {
     @Bindable var model: ReaderModel
     let series: Series
 
-    @State private var newName = ""
-    @State private var isNaming = false
-    @FocusState private var nameFocused: Bool
-
     private var projects: [ProjectSummary] {
-        model.projects.summaries
-            .filter { $0.series == series.name }
-            .sorted { ($0.edited ?? .distantPast) > ($1.edited ?? .distantPast) }
+        ProjectsSort.recent.sorted(model.projects.summaries.filter { $0.series == series.name }, words: [:])
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                header
-                contents
-                projectsSection
-            }
-            .padding(22)
-        }
-        .onAppear { if model.wantsNewProject { beginNaming() } }
-        .onChange(of: model.wantsNewProject) { _, wants in if wants { beginNaming() } }
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: 18) {
-            CoverView(model: model, itemID: series.items.first?.id)
-                .frame(width: 130, height: 180)
-            VStack(alignment: .leading, spacing: 8) {
+        HomeScroll(header: {
+            HomeControlsRow {
                 Button { model.browsingSeries = nil } label: {
                     Label("Library", systemImage: "chevron.left")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
                 }
-                .buttonStyle(.plain)
-                Text(series.name)
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(.white)
-                Text(series.summary)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.6))
-                Spacer(minLength: 4)
-                HStack(spacing: 10) {
-                    let pickUp = model.library.continueItem(in: series)
-                    let started = pickUp.map { model.library.hasStarted($0) || model.library.index.lastRead[series.name] != nil } ?? false
-                    Button { model.read(series) } label: {
-                        Label(started ? "Continue" : "Read", systemImage: "book")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(pickUp == nil)
-                    if started, let pickUp {
-                        Text(pickUp.displayName)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.55))
-                            .lineLimit(1)
-                    }
-                }
+                .glassButtonStyle()
+            } trailing: {
+                EmptyView()
             }
-            Spacer()
+        }) {
+            VStack(alignment: .leading, spacing: 36) {
+                SeriesHero(model: model, series: series)
+                if !projects.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeading("Projects", count: projects.count)
+                        ProjectsRow(model: model, projects: projects, seriesName: series.name)
+                    }
+                }
+                contents
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 2)
+            .padding(.bottom, 28)
         }
     }
 
     // MARK: - Contents
 
+    /// One section per arc, each listing its chapters the same way a plain
+    /// series (no arcs at all) lists its own — a folder is just another
+    /// section, not a separate screen to drill into. A series with no arcs
+    /// gets a single "Chapters" or "Volumes" heading over the lot.
     private var contents: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        LazyVStack(alignment: .leading, spacing: 28) {
             ForEach(Array(series.arcs.enumerated()), id: \.offset) { _, group in
-                if let name = group.name {
-                    sectionHeading(name).padding(.top, 8)
-                } else if !series.hasArcs {
-                    sectionHeading("Volumes")
-                }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 8, alignment: .top)],
-                          alignment: .leading, spacing: 4) {
-                    ForEach(group.items) { item in
-                        ItemRow(model: model, item: item)
-                    }
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeading(sectionName(for: group), count: group.items.count)
+                    itemList(group.items)
                 }
             }
         }
     }
 
-    private func sectionHeading(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.5))
-            .textCase(.uppercase)
+    private func sectionName(for group: (name: String?, items: [LibraryItem])) -> String {
+        if series.hasArcs, let name = group.name { return name }
+        return series.chapterCount > 0 ? "Chapters" : (series.volumeCount > 0 ? "Volumes" : "Contents")
     }
 
-    // MARK: - Projects
-
-    private var projectsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                sectionHeading("Projects")
-                Spacer()
-                if isNaming {
-                    HStack(spacing: 8) {
-                        TextField("Project name", text: $newName)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white)
-                            .focused($nameFocused)
-                            .frame(width: 220)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(.white.opacity(0.12), in: Capsule())
-                            .onSubmit(create)
-                            .onExitCommand { isNaming = false }
-                        Button("Create", action: create)
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
-                        Button("Cancel") { isNaming = false }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                } else {
-                    Button { beginNaming() } label: {
-                        Label("New Project", systemImage: "plus")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-            if projects.isEmpty {
-                Text("No scripts about \(series.name) yet.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.5))
-            } else {
-                ProjectsGrid(model: model, projects: projects)
+    private func itemList(_ items: [LibraryItem]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 8, alignment: .top)],
+                  alignment: .leading, spacing: 4) {
+            ForEach(items) { item in
+                ItemRow(model: model, item: item)
             }
         }
-    }
-
-    private func beginNaming() {
-        newName = ""
-        isNaming = true
-        model.wantsNewProject = false
-        DispatchQueue.main.async { nameFocused = true }
-    }
-
-    private func create() {
-        let name = newName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        isNaming = false
-        model.newProject(named: name, series: series.name)
     }
 }
 
-/// One volume or chapter in the series' list, with how far it's been read.
+// MARK: - Hero
+
+/// The series, big: its cover, how far through the whole of it the reader
+/// is, and the button to carry on — or start.
+private struct SeriesHero: View {
+    @Bindable var model: ReaderModel
+    let series: Series
+    @State private var hovered = false
+
+    var body: some View {
+        let library = model.library
+        let pickUp = library.continueItem(in: series)
+        let progress = library.seriesProgress(series)
+        HStack(alignment: .bottom, spacing: 30) {
+            Button { model.read(series) } label: {
+                CoverView(model: model, itemID: series.items.first?.id, fill: true)
+                    .frame(width: 200, height: 300)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.large))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.large).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                    .shadow(color: .black.opacity(hovered ? 0.6 : 0.45), radius: hovered ? 28 : 20, y: hovered ? 16 : 10)
+                    .scaleEffect(hovered ? 1.02 : 1)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovered)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .disabled(pickUp == nil)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(series.name)
+                    .font(.system(size: 40, weight: .bold))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(2)
+                Text(series.summary)
+                    .font(Typography.heading)
+                    .foregroundStyle(Palette.textSecondary)
+                    .padding(.top, 4)
+
+                if let progress, let pickUp {
+                    HStack(spacing: 10) {
+                        ProgressRing(fraction: progress, lineWidth: 2.5)
+                            .frame(width: 18, height: 18)
+                        Text("\(pickUp.label) · \(Int((progress * 100).rounded()))% through the series")
+                            .font(Typography.body)
+                            .foregroundStyle(Palette.textSecondary)
+                    }
+                    .padding(.top, 16)
+                }
+
+                HStack(spacing: 10) {
+                    Button { model.read(series) } label: {
+                        Label(progress == nil ? "Start Reading" : "Continue", systemImage: "play.fill")
+                    }
+                    .glassButtonStyle(prominent: true)
+                    .disabled(pickUp == nil)
+                    Button { model.requestNewProject(series: series.name) } label: {
+                        Label("New Project", systemImage: "plus")
+                    }
+                    .glassButtonStyle()
+                }
+                .controlSize(.large)
+                .padding(.top, 20)
+            }
+            .padding(.bottom, 8)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+// MARK: - Items
+
+/// Where the reader stands with one volume or chapter.
+enum ItemReadState: Equatable {
+    case unread
+    case reading(Double)
+    case read
+
+    /// Near enough the end counts as read: the last spread is rarely the
+    /// exact final position, and a credits page shouldn't leave it "unread".
+    static func of(progress: Double?, started: Bool) -> ItemReadState {
+        if let progress, progress >= 0.95 { return .read }
+        if started { return .reading(progress ?? 0) }
+        return .unread
+    }
+}
+
+/// One volume or chapter in the series' list: whether it's been read, its
+/// number, its title.
 private struct ItemRow: View {
     @Bindable var model: ReaderModel
     let item: LibraryItem
     @State private var hovered = false
 
     var body: some View {
+        let isOpen = item.id == model.item?.id
+        let state = ItemReadState.of(progress: model.library.progress(for: item), started: model.library.hasStarted(item))
         Button { model.showsHome = false; model.open(item: item) } label: {
             HStack(spacing: 10) {
+                mark(for: state)
+                    .frame(width: 14, height: 14)
                 Text(item.label)
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(item.id == model.item?.id ? Color.accentColor : .white.opacity(0.9))
+                    .foregroundStyle(isOpen ? Palette.textPrimary : (state == .read ? Palette.textTertiary : Palette.textSecondary))
                     .frame(minWidth: 48, alignment: .leading)
                 if item.chapter != nil, !item.title.isEmpty, item.title != item.label {
                     Text(item.title)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.65))
+                        .font(Typography.caption)
+                        .foregroundStyle(state == .read ? Palette.textTertiary : Palette.textSecondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                let spread = model.library.position(for: item)
-                if spread > 0 {
-                    Text("spread \(spread + 1)")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.4))
-                }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(hovered ? 0.1 : 0.04)))
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .frame(height: 32)
+            .background(isOpen ? Palette.surfaceSelected : (hovered ? Palette.surfaceHover : .clear),
+                        in: RoundedRectangle(cornerRadius: Radius.small))
+            .contentShape(RoundedRectangle(cornerRadius: Radius.small))
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .onHover { inside in
+            hovered = inside
+            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+    }
+
+    @ViewBuilder
+    private func mark(for state: ItemReadState) -> some View {
+        switch state {
+        case .read:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.textTertiary)
+        case .reading(let fraction):
+            ProgressRing(fraction: fraction, lineWidth: 2)
+        case .unread:
+            Image(systemName: "circle")
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.textTertiary.opacity(0.5))
+        }
     }
 }

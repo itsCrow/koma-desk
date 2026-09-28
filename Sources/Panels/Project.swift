@@ -27,6 +27,15 @@ final class Project {
     var pendingReveal: String?
     /// A page-range change for the editor to apply to the writing.
     var pendingSpanCommand: SpanCommand?
+    /// An inline formatting change — bold, italic, highlight, text color —
+    /// for the editor to apply to the current selection.
+    var pendingInlineCommand: InlineCommand?
+    /// A beat's color, changed from the tag rail. Unlike a beat's other
+    /// mutations — done, rename, create, remove — this one starts outside
+    /// the text view (a SwiftUI popover, not a click inside the script), so
+    /// it needs the same pending-command handoff the page-range/formatting
+    /// commands above already use to reach the live editor.
+    var pendingBeatColorChange: BeatColorChange?
 
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
@@ -104,6 +113,19 @@ final class Project {
         return manifest.spans.filter { !used.contains($0.id) }
     }
 
+    /// The beats in the order their marker lines appear in the script.
+    var beatsInScriptOrder: [Beat] {
+        let byID = Dictionary(manifest.beats.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ScriptMarkdown.beatIDs(in: script).compactMap { byID[$0] }
+    }
+
+    /// Beats whose marker line is no longer anywhere in the script — deleted
+    /// along with its paragraph, rather than through the "Remove Beat" menu.
+    var unusedBeats: [Beat] {
+        let used = Set(ScriptMarkdown.beatIDs(in: script))
+        return manifest.beats.filter { !used.contains($0.id) }
+    }
+
     /// Citations no longer anywhere in the script. Deleting a chip leaves the
     /// citation behind, so without this they pile up unseen.
     var unusedCitations: [Citation] {
@@ -161,6 +183,10 @@ final class Project {
         // and this is the one moment the writer has asked for a tidy-up.
         let usedSpans = Set(ScriptMarkdown.spanIDs(in: script))
         manifest.spans.removeAll { !usedSpans.contains($0.id) }
+        // Same for beats: a marker line deleted along with its paragraph
+        // leaves an orphaned record behind otherwise.
+        let usedBeats = Set(ScriptMarkdown.beatIDs(in: script))
+        manifest.beats.removeAll { !usedBeats.contains($0.id) }
         // The writer keeps its own manifest of everything it ever wrote; it
         // should describe what the folder now holds.
         CaptureWriter(folder: capturesFolder).pruneMissingRecords()
@@ -172,8 +198,11 @@ final class Project {
     func opening(of spanID: String, limit: Int = 90) -> String? {
         for block in ScriptMarkdown.parse(script) where block.spanID == spanID {
             let text = block.inlines.map { run -> String in
-                if case .text(let s) = run { return s }
-                return " "
+                switch run {
+                case .text(let s): return s
+                case .styledText(let styled): return styled.text
+                case .citation: return " "
+                }
             }.joined()
                 .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespaces)
@@ -212,6 +241,7 @@ final class Project {
             block.inlines.map { run -> String in
                 switch run {
                 case .text(let s): return s
+                case .styledText(let styled): return styled.text
                 case .citation(_, let text): return text
                 }
             }.joined().trimmingCharacters(in: .whitespaces)
@@ -225,6 +255,31 @@ enum ScriptCommand: Equatable {
     case body
     /// An aside for the editor rather than something to read aloud.
     case note
+    /// Left, centered, or right — independent of the paragraph's kind.
+    case alignment(ScriptAlignment)
+}
+
+/// Inline formatting the writer can apply to the current selection — a
+/// different shape of command from `ScriptCommand`, which always acts on the
+/// whole paragraph at the cursor.
+enum InlineCommand: Equatable {
+    case toggleBold
+    case toggleItalic
+    /// `nil` clears the highlight from the selection.
+    case setHighlight(ScriptSwatch?)
+    /// `nil` returns the selection to its paragraph's own color.
+    case setTextColor(ScriptSwatch?)
+}
+
+/// What the cursor or selection is currently formatted as — what the
+/// formatting toolbar's buttons show as pressed.
+struct ScriptSelectionFormatting: Equatable {
+    var bold = false
+    var italic = false
+    var alignment: ScriptAlignment = .leading
+    var style: ScriptStyle.Paragraph = .body
+    var highlight: ScriptSwatch?
+    var textColor: ScriptSwatch?
 }
 
 /// What to do to the page range around the writing at the cursor.
@@ -235,6 +290,17 @@ enum SpanCommand: Equatable {
     case end
     /// Take the range off the block at the cursor entirely.
     case remove
+    /// Put this range on every paragraph `selection` touches — the current
+    /// selection when nil — and nothing more: writing already there, linked
+    /// after the fact, not a block that grows as the writer types on.
+    case link(PageSpan, selection: NSRange?)
+}
+
+/// A beat's new color, from the rail's number-badge popover — `nil` resets
+/// it to the default violet every beat draws with until it's given one.
+struct BeatColorChange: Equatable {
+    let beatID: String
+    let color: ScriptSwatch?
 }
 
 import UniformTypeIdentifiers

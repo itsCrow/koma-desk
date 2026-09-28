@@ -91,6 +91,87 @@ public struct PageSpan: Codable, Equatable, Sendable, Identifiable {
 
     public var firstPage: Int { pageNumbers.first ?? firstPageIndex + 1 }
     public var lastPage: Int { pageNumbers.last ?? firstPage }
+
+    /// Pages as a writer types them: "42", "42-45", "42–45", "pp. 42–45".
+    /// Backwards ends are put in order; page 0, junk, or more than two
+    /// numbers are nil.
+    public static func parsePages(_ input: String) -> ClosedRange<Int>? {
+        var s = input.trimmingCharacters(in: .whitespaces).lowercased()
+        for prefix in ["pp.", "p."] where s.hasPrefix(prefix) {
+            s = String(s.dropFirst(prefix.count))
+            break
+        }
+        let parts = s.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "-" || $0 == "–" || $0 == "—" })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard (1...2).contains(parts.count) else { return nil }
+        let numbers = parts.compactMap { Int($0) }
+        guard numbers.count == parts.count, numbers.allSatisfy({ $0 >= 1 }),
+              let low = numbers.min(), let high = numbers.max()
+        else { return nil }
+        return low...high
+    }
+}
+
+/// A short production note on a beat — "green screen", "zoom", "blueprint"
+/// — free text plus one of the writer's own curated colors, for scanning a
+/// list of beats at a glance.
+public struct Tag: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var text: String
+    public var color: ScriptSwatch
+
+    public init(id: String = ProjectManifest.makeID(), text: String, color: ScriptSwatch) {
+        self.id = id
+        self.text = text
+        self.color = color
+    }
+}
+
+/// A section of the script the writer has marked off, by hand, in Editor
+/// mode — covering exactly the paragraphs it was made on, never more.
+public struct Beat: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    /// "Cold Open", "Turtle School flashback" — never auto-numbered.
+    public var title: String
+    /// Checked off in Editor mode only; Writer and Voice mode never show or
+    /// touch this.
+    public var isDone: Bool
+    public var date: Date
+    /// Production notes — "green screen", "zoom" — shown in Editor mode's
+    /// tag rail, never in Writer or Voice.
+    public var tags: [Tag]
+    /// `nil` draws as the default violet every beat used to share. Set, it's
+    /// this beat's own — the rail's number badge and the block in the
+    /// script always agree on which.
+    public var color: ScriptSwatch?
+
+    public init(id: String = ProjectManifest.makeID(), title: String, isDone: Bool = false,
+                date: Date = Date(), tags: [Tag] = [], color: ScriptSwatch? = nil) {
+        self.id = id
+        self.title = title
+        self.isDone = isDone
+        self.date = date
+        self.tags = tags
+        self.color = color
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, isDone, date, tags, color
+    }
+
+    /// Written by hand for the same reason `ProjectManifest`'s own decoder
+    /// is: the synthesized one throws on a missing key rather than falling
+    /// back to a default, and a beat saved before tags or a color existed
+    /// has neither key at all.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        isDone = try container.decode(Bool.self, forKey: .isDone)
+        date = try container.decode(Date.self, forKey: .date)
+        tags = try container.decodeIfPresent([Tag].self, forKey: .tags) ?? []
+        color = try container.decodeIfPresent(ScriptSwatch.self, forKey: .color)
+    }
 }
 
 /// A citation or a page range, split into its parts.
@@ -145,9 +226,9 @@ public struct ReferenceLabel: Equatable, Sendable {
 /// Everything about a project except the script itself. A project is about
 /// one series; reading positions belong to the library, not to it.
 public struct ProjectManifest: Codable, Equatable, Sendable {
-    /// 4 since a run of writing can name the pages it's about — see `PageSpan`.
-    /// 3 is still read, and upgraded on the next save.
-    public static let currentVersion = 4
+    /// 7 since a beat can carry its own color — see `Beat.color`. 6 is
+    /// still read, and upgraded on the next save.
+    public static let currentVersion = 7
     /// The oldest format still understood. Older than this is refused rather
     /// than half-read, because its citations point at things by names this
     /// version doesn't know.
@@ -162,24 +243,33 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
     public var citations: [Citation]
     /// The page ranges the script's blocks of writing point at.
     public var spans: [PageSpan]
+    /// The beats the writer has marked off in Editor mode.
+    public var beats: [Beat]
+    /// A goal for how long the script should run, in words — set once at
+    /// creation, referenced later once there's something to check it
+    /// against.
+    public var targetWordCount: Int?
 
     public init(name: String, series: String, items: [ItemRef] = [], citations: [Citation] = [],
-                spans: [PageSpan] = []) {
+                spans: [PageSpan] = [], beats: [Beat] = [], targetWordCount: Int? = nil) {
         self.version = Self.currentVersion
         self.name = name
         self.series = series
         self.items = items
         self.citations = citations
         self.spans = spans
+        self.beats = beats
+        self.targetWordCount = targetWordCount
     }
 
     enum CodingKeys: String, CodingKey {
-        case version, name, series, items, citations, spans
+        case version, name, series, items, citations, spans, beats, targetWordCount
     }
 
     /// Written by hand because the synthesized decoder does not fall back to a
     /// property's default — it throws. A version-3 project has no `spans` key
-    /// at all, and it has to open.
+    /// at all, and a version-4 one has no `beats` key, and each has to open;
+    /// older projects have no `targetWordCount` either.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(Int.self, forKey: .version)
@@ -188,6 +278,8 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
         items = try container.decodeIfPresent([ItemRef].self, forKey: .items) ?? []
         citations = try container.decodeIfPresent([Citation].self, forKey: .citations) ?? []
         spans = try container.decodeIfPresent([PageSpan].self, forKey: .spans) ?? []
+        beats = try container.decodeIfPresent([Beat].self, forKey: .beats) ?? []
+        targetWordCount = try container.decodeIfPresent(Int.self, forKey: .targetWordCount)
     }
 
     public func citation(id: String) -> Citation? {
@@ -202,6 +294,10 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
         spans.first { $0.id == id }
     }
 
+    public func beat(id: String) -> Beat? {
+        beats.first { $0.id == id }
+    }
+
     /// Adds a range, or replaces the one already under that id when its pages
     /// are changed.
     public mutating func store(_ span: PageSpan) {
@@ -210,6 +306,22 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
         } else {
             spans.append(span)
         }
+    }
+
+    /// Adds a beat, or replaces the one already under that id when its title
+    /// or done state changes.
+    public mutating func store(_ beat: Beat) {
+        if let index = beats.firstIndex(where: { $0.id == beat.id }) {
+            beats[index] = beat
+        } else {
+            beats.append(beat)
+        }
+    }
+
+    /// Unlike a page range, a beat is also forgotten outright when the
+    /// writer removes it — there's no "end" to just stop extending.
+    public mutating func removeBeat(id: String) {
+        beats.removeAll { $0.id == id }
     }
 
     public func label(for citation: Citation) -> ReferenceLabel {

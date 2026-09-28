@@ -18,8 +18,10 @@ struct ReaderView: View {
         .dropDestination(for: URL.self) { urls, _ in dropped(urls) } isTargeted: { isDropTargeted = $0 }
         .overlay {
             if isDropTargeted {
+                // White over a dark ring, so it shows on a white page too.
                 RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.accentColor, lineWidth: 4)
+                    .strokeBorder(Color.black.opacity(0.5), lineWidth: 6)
+                    .overlay(RoundedRectangle(cornerRadius: 12).inset(by: 1).strokeBorder(Palette.accent, lineWidth: 4))
                     .padding(8)
             }
         }
@@ -34,12 +36,27 @@ struct ReaderView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .sheet(isPresented: $model.wantsNewProject) {
+            NewProjectSheet(model: model)
+        }
+        .sheet(item: $model.linkingPages) { request in
+            LinkPagesSheet(model: model, request: request)
+        }
+        .sheet(isPresented: $model.isImportingLink) {
+            ImportLinkSheet(model: model)
+        }
     }
 
     /// The contents beside the pages, then the pages with the script pane
     /// wherever it's been put.
     @ViewBuilder
     private var layout: some View {
+        if model.isFocusedWriting, let project = model.project, model.showsScript {
+            // The comic (and its contents sidebar) set aside entirely —
+            // this pane is the whole window while it's up.
+            ScriptPaneView(model: model, project: project)
+                .transition(.opacity)
+        } else {
         HStack(spacing: 0) {
             // The series' contents, when there's more than one thing in it.
             if let series = model.series, model.hasContents, model.showsContents {
@@ -78,15 +95,22 @@ struct ReaderView: View {
             }
             .layoutPriority(1)
         }
+        .transition(.opacity)
+        }
     }
 
     /// The layout with the reader's keys and focus on it.
     private var interactive: some View {
         layout
         .animation(.easeOut(duration: 0.2), value: model.showsContents)
+        .animation(.spring(response: 0.4, dampingFraction: 0.88), value: model.isFocusedWriting)
         // Height follows from the spread's shape; only the width needs a floor.
         .frame(minWidth: 640, minHeight: 300)
         .navigationTitle(model.title ?? "Panels")
+        .hiddenToolbarBackground()
+        // The app's own accent for SwiftUI's controls, not the user's system
+        // accent — see `Palette.accent`.
+        .tint(Palette.accent)
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
@@ -194,14 +218,26 @@ struct ReaderView: View {
                 spread
             } else {
                 // Nothing open: the library and the projects are the front door.
-                HomeView(model: model, isOverlay: false)
-                    .padding(16)
+                // Home runs up under the title bar — one surface to the top
+                // edge — and is told how tall the bar is, to keep its
+                // scrolling content below it.
+                GeometryReader { geo in
+                    HomeView(model: model, isOverlay: false, titlebarInset: geo.safeAreaInsets.top)
+                        .ignoresSafeArea(.container, edges: .top)
+                }
             }
 
             if model.isLoading {
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(.white)
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                    if let progress = model.remoteFetchProgress {
+                        Text("Downloading page \(progress.done) of \(progress.total)…")
+                            .font(.callout)
+                            .foregroundStyle(.white)
+                    }
+                }
             }
 
             if model.hasComic, model.hasContents, !model.showsContents {
@@ -219,21 +255,34 @@ struct ReaderView: View {
         ))
     }
 
+    @ViewBuilder
     private var spread: some View {
-        SpreadStrip(
-            model: model,
-            spreadIndex: model.spreadIndex,
-            direction: model.direction,
-            highlights: highlightsOnPages,
-            focus: model.focusOutlines,
-            isCapturing: model.isCapturing,
-            panelsProvider: { url in await model.panels(on: url) },
-            onCapture: { url, shape in model.capture(page: url, shape: shape) },
-            onEndCapture: { model.isCapturing = false },
-            // Swiping or zooming the pages means the reader is reading again.
-            onInteraction: { setControls(visible: false) },
-            onTap: { focused = true; setControls(visible: !showsControls) }
-        )
+        if model.readingOrientation == .vertical {
+            VerticalPageStripView(
+                model: model,
+                highlights: highlightsOnPages,
+                focus: model.focusOutlines,
+                isCapturing: model.isCapturing,
+                panelsProvider: { url in await model.panels(on: url) },
+                onCapture: { url, shape in model.capture(page: url, shape: shape) },
+                onEndCapture: { model.isCapturing = false }
+            )
+        } else {
+            SpreadStrip(
+                model: model,
+                spreadIndex: model.spreadIndex,
+                direction: model.direction,
+                highlights: highlightsOnPages,
+                focus: model.focusOutlines,
+                isCapturing: model.isCapturing,
+                panelsProvider: { url in await model.panels(on: url) },
+                onCapture: { url, shape in model.capture(page: url, shape: shape) },
+                onEndCapture: { model.isCapturing = false },
+                // Swiping or zooming the pages means the reader is reading again.
+                onInteraction: { setControls(visible: false) },
+                onTap: { focused = true; setControls(visible: !showsControls) }
+            )
+        }
     }
 
     // MARK: - Controls
@@ -412,8 +461,11 @@ private struct PageChooser: View {
                         }
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color.accentColor.opacity(hovered == page.number ? 0.28 : 0.12))
-                        .overlay(Rectangle().strokeBorder(Color.accentColor.opacity(hovered == page.number ? 0.9 : 0.4), lineWidth: 3))
+                        // Dark wash, white edge over a dark ring: the page is
+                        // often white paper, and white alone would vanish on it.
+                        .background(Color.black.opacity(hovered == page.number ? 0.45 : 0.25))
+                        .overlay(Rectangle().strokeBorder(Color.black.opacity(0.5), lineWidth: 5))
+                        .overlay(Rectangle().inset(by: 1).strokeBorder(Color.white.opacity(hovered == page.number ? 0.95 : 0.5), lineWidth: 3))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -484,5 +536,19 @@ private struct WarningBanner: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(.yellow.opacity(0.9), in: Capsule())
+    }
+}
+
+extension View {
+    /// SwiftUI gives the window a toolbar of its own — for the title, even
+    /// hidden — and draws its background as a band across the top, over
+    /// whatever runs up under the title bar. Nothing here lives in that band.
+    @ViewBuilder
+    func hiddenToolbarBackground() -> some View {
+        if #available(macOS 15.0, *) {
+            self.toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        } else {
+            self
+        }
     }
 }

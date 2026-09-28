@@ -93,9 +93,9 @@ public enum ProjectStore {
 
     /// Makes a new, empty project about `series` at `url` (which should end
     /// in `.panelsproject`).
-    public static func create(at url: URL, name: String, series: String) throws -> Loaded {
+    public static func create(at url: URL, name: String, series: String, targetWordCount: Int? = nil) throws -> Loaded {
         try FileManager.default.createDirectory(at: capturesFolder(of: url), withIntermediateDirectories: true)
-        let loaded = Loaded(manifest: ProjectManifest(name: name, series: series), script: "")
+        let loaded = Loaded(manifest: ProjectManifest(name: name, series: series, targetWordCount: targetWordCount), script: "")
         try save(loaded, to: url)
         return loaded
     }

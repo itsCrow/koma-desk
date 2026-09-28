@@ -1,97 +1,225 @@
 import SwiftUI
 import PanelsProject
 
-/// The script pane: the writing, or the list of shots it adds up to.
+/// The script pane: the writing, or (shown a different way — see the
+/// Reader menu's "Show Shot List") the list of shots it adds up to.
 struct ScriptPaneView: View {
     @Bindable var model: ReaderModel
     let project: Project
 
+    @State private var isRenaming = false
+    @State private var renameText = ""
+    @FocusState private var renameFocused: Bool
+
+    /// A document's worth of width — beyond this, more room just goes to
+    /// margin either side, the way a page keeps its shape as a window grows.
+    private static let focusedWidth: CGFloat = 820
+
+    /// Editor mode's tag rail earns its place the same way the formatting
+    /// toolbar earns its — only once there's something for it to hold. A
+    /// beat with no tags yet still gets a slot, so there's somewhere to add
+    /// the first one.
+    private var showsBeatTagsRail: Bool {
+        model.scriptMode == .editor && !project.beatsInScriptOrder.isEmpty
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                projectMenu
-                Spacer(minLength: 6)
-                if model.showsShotList {
-                    Text("\(project.citationsInScriptOrder.count) shots")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-                HStack(spacing: 2) {
-                    tab("Script", shots: false)
-                    tab("Shots", shots: true)
-                }
+            HStack {
+                Spacer(minLength: 0)
+                title
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(ScriptStyle.headerBackground)
+            .background(ScriptStyle.backgroundColor)
+            .overlay(alignment: .trailing) {
+                HStack(spacing: 2) {
+                    modeMenu
+                    focusButton
+                }
+            }
 
             Divider().overlay(.white.opacity(0.1))
 
-            ZStack {
-                // Both stay alive so switching doesn't reload the editor and
-                // lose the cursor.
-                ScriptEditorView(project: project, model: model)
-                    .opacity(model.showsShotList ? 0 : 1)
-                    .allowsHitTesting(!model.showsShotList)
-                if model.showsShotList {
-                    ShotListView(model: model, project: project)
-                }
+            // The toolbar only earns its place when there's room to write in
+            // and something worth formatting — the ordinary split view keeps
+            // menu-and-shortcut-driven formatting exactly as it was.
+            if model.isFocusedWriting, model.scriptMode == .writer {
+                ScriptFormattingToolbar(model: model)
+                Divider().overlay(.white.opacity(0.1))
             }
+
+            content
         }
     }
 
-    /// The project's name, and a way to any other.
-    private var projectMenu: some View {
-        Menu {
-            ForEach(model.projects.groupedBySeries, id: \.series) { group in
-                Section(group.series) {
-                    ForEach(group.projects) { summary in
-                        Button {
-                            model.switchTo(summary.url)
-                        } label: {
-                            if summary.url == project.url {
-                                Label(summary.name, systemImage: "checkmark")
-                            } else {
-                                Text(summary.name)
-                            }
-                        }
-                        .disabled(summary.url == project.url)
+    @ViewBuilder
+    private var content: some View {
+        if model.isFocusedWriting {
+            // The comic is hidden entirely — see ReaderView — so this pane
+            // has the whole window. Centering the editor at a fixed width
+            // instead of letting it stretch edge to edge is what makes it
+            // read as a page, the way Docs or Word keep a document a
+            // constant width no matter how wide the window gets.
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                // The rail eats into space the spacer was already leaving
+                // empty, so it "just appears" without the editor's own
+                // width changing — flush against the editor, same divider
+                // the split view uses, no gap between them.
+                if showsBeatTagsRail {
+                    BeatTagsRail(model: model, project: project)
+                        .frame(width: model.beatRailWidth)
+                    BeatRailResizeHandle(model: model)
+                }
+                ScriptEditorView(project: project, model: model)
+                    .frame(maxWidth: Self.focusedWidth)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity)
+            .background(ScriptStyle.backgroundColor)
+        } else {
+            HStack(spacing: 0) {
+                // Outside the extended writing area the rail is a side
+                // panel, not a margin to be dragged wide — it stays pinned
+                // to just enough room for the number badge and a tag, so
+                // the editor beside it keeps as much width as it can.
+                if showsBeatTagsRail {
+                    BeatTagsRail(model: model, project: project)
+                        .frame(width: BeatTagsRail.unextendedWidth)
+                }
+                ZStack(alignment: .bottomTrailing) {
+                    // Both stay alive so switching doesn't reload the editor
+                    // and lose the cursor.
+                    ScriptEditorView(project: project, model: model)
+                        .opacity(model.showsShotList ? 0 : 1)
+                        .allowsHitTesting(!model.showsShotList)
+                    if model.showsShotList {
+                        ShotListView(model: model, project: project)
+                    } else {
+                        ScriptStatsPill(project: project)
+                            .allowsHitTesting(false)
                     }
                 }
             }
-            Divider()
-            Button("New Project…") { model.requestNewProject() }
-            Button("All Projects…") { model.homeTab = .projects; model.showsHome = true }
-        } label: {
-            HStack(spacing: 5) {
-                Text(project.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            .foregroundStyle(.white)
+            .background(ScriptStyle.backgroundColor)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Switch project")
     }
 
-    private func tab(_ title: String, shots: Bool) -> some View {
-        let selected = model.showsShotList == shots
-        return Button {
-            model.showsShotList = shots
+    /// Writer, Voice, or Editor — a menu rather than a segmented control,
+    /// since the header has room for one more ~22×22 button but not for
+    /// three labeled segments.
+    private var modeMenu: some View {
+        Menu {
+            ForEach(ScriptMode.allCases, id: \.self) { mode in
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { model.scriptMode = mode }
+                } label: {
+                    if model.scriptMode == mode {
+                        Label(mode.label, systemImage: "checkmark")
+                    } else {
+                        Text(mode.label)
+                    }
+                }
+            }
         } label: {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(selected ? .black : .white.opacity(0.8))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(selected ? Color.white.opacity(0.9) : .clear, in: Capsule())
+            Image(systemName: model.scriptMode.icon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(width: 22, height: 22)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Switch between writing, voice, and editor modes")
+    }
+
+    private var focusButton: some View {
+        Button {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) { model.isFocusedWriting.toggle() }
+        } label: {
+            Image(systemName: model.isFocusedWriting
+                  ? "arrow.down.right.and.arrow.up.left"
+                  : "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(width: 22, height: 22)
         }
         .buttonStyle(.plain)
+        .padding(.trailing, 4)
+        .help(model.isFocusedWriting ? "Show the comic again" : "Hide the comic and write full width")
+    }
+
+    /// The project's name — click to rename it in place, rather than to
+    /// switch to another project (the Projects tab does that now).
+    private var title: some View {
+        Group {
+            if isRenaming {
+                TextField("Project name", text: $renameText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .focused($renameFocused)
+                    .frame(maxWidth: 280)
+                    .onSubmit(commitRename)
+                    .onExitCommand { isRenaming = false }
+            } else {
+                Button(action: beginRenaming) {
+                    Text(project.name)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .help("Click to rename")
+            }
+        }
+    }
+
+    private func beginRenaming() {
+        renameText = project.name
+        isRenaming = true
+        DispatchQueue.main.async { renameFocused = true }
+    }
+
+    private func commitRename() {
+        let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+        isRenaming = false
+        guard !trimmed.isEmpty, trimmed != project.name else { return }
+        model.renameProject(project.url, to: trimmed)
+    }
+}
+
+/// How much has been written — counted off the readable script, not the
+/// raw Markdown, so a citation's link syntax doesn't inflate the count.
+/// Pinned to the bottom edge and only rounded on top, like a tab sitting in
+/// the corner, rather than a badge floating over the text.
+private struct ScriptStatsPill: View {
+    let project: Project
+
+    private var plainText: String { project.plainTextScript(notes: .marked) }
+    private var wordCount: Int {
+        plainText.split { $0.isWhitespace || $0.isNewline }.count
+    }
+    private var characterCount: Int { plainText.count }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("\(wordCount) word\(wordCount == 1 ? "" : "s")")
+            Text("·").foregroundStyle(.white.opacity(0.3))
+            Text("\(characterCount) character\(characterCount == 1 ? "" : "s")")
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.white.opacity(0.55))
+        .padding(.horizontal, 10)
+        .padding(.top, 5)
+        .padding(.bottom, 4)
+        .background(
+            .white.opacity(0.08),
+            in: UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 0,
+                                        bottomTrailingRadius: 0, topTrailingRadius: 0)
+        )
     }
 }
 

@@ -7,18 +7,28 @@ struct SeriesContentsView: View {
     @Bindable var model: ReaderModel
     let series: Series
 
+    /// Reading order by default; reversed shows the newest arc and its
+    /// newest item first, each arc's own items reversed right along with
+    /// it, so the list reads top-to-bottom the same way either direction.
+    @State private var isReversed = false
+
+    private var displayedArcs: [(name: String?, items: [LibraryItem])] {
+        guard isReversed else { return series.arcs }
+        return series.arcs.reversed().map { (name: $0.name, items: $0.items.reversed()) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Button { model.showSeriesPage() } label: {
-                    Image(systemName: "chevron.left")
+                Button { model.closeComicToHome() } label: {
+                    Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white.opacity(0.7))
                         .frame(width: 22, height: 22)
                         .background(.white.opacity(0.1), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .help("Back to the series")
+                .help("Close the comic")
                 VStack(alignment: .leading, spacing: 2) {
                     Text(series.name)
                         .font(.system(size: 13, weight: .semibold))
@@ -29,6 +39,14 @@ struct SeriesContentsView: View {
                         .foregroundStyle(.white.opacity(0.5))
                 }
                 Spacer()
+                Button { isReversed.toggle() } label: {
+                    Image(systemName: isReversed ? "arrow.up" : "arrow.down")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .help(isReversed ? "Showing newest first — click for oldest first" : "Showing oldest first — click for newest first")
                 Button { model.showsContents = false } label: {
                     Image(systemName: "sidebar.left")
                         .font(.system(size: 12, weight: .medium))
@@ -45,7 +63,7 @@ struct SeriesContentsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(series.arcs.enumerated()), id: \.offset) { _, group in
+                        ForEach(Array(displayedArcs.enumerated()), id: \.offset) { _, group in
                             Text(group.name ?? (series.hasArcs ? "" : "Volumes"))
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.45))
@@ -91,7 +109,7 @@ private struct ContentsRow: View {
             HStack(spacing: 8) {
                 Text(item.label)
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(isCurrent ? Color.accentColor : .white.opacity(0.85))
+                    .foregroundStyle(isCurrent ? Palette.textPrimary : .white.opacity(0.85))
                     .frame(minWidth: 44, alignment: .leading)
                 if item.chapter != nil, !item.title.isEmpty, item.title != item.label {
                     Text(item.title)
@@ -103,14 +121,14 @@ private struct ContentsRow: View {
                 if isCurrent {
                     Image(systemName: "book.fill")
                         .font(.system(size: 10))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(Palette.textPrimary)
                 } else if hasStarted {
                     Circle().fill(.white.opacity(0.35)).frame(width: 5, height: 5)
                 }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
-            .background(isCurrent ? Color.accentColor.opacity(0.14) : (hovered ? Color.white.opacity(0.06) : .clear))
+            .background(isCurrent ? Palette.surfaceSelected : (hovered ? Color.white.opacity(0.06) : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

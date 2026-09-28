@@ -20,80 +20,72 @@ struct LibraryView: View {
     // MARK: - Shelves
 
     private var shelves: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    if let missing = model.missingSeries {
-                        MissingSeriesNotice(series: missing) { library.presentAddPanel() }
-                    }
-                    if !library.recentlyRead.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            heading("Continue reading")
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 12) {
-                                    ForEach(library.recentlyRead, id: \.item.id) { entry in
-                                        ContinueCard(model: model, series: entry.series, item: entry.item)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        heading("Series")
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 16, alignment: .top)],
-                                  alignment: .leading, spacing: 18) {
-                            ForEach(library.series) { series in
-                                SeriesCard(model: model, series: series) {
-                                    model.browsingSeries = series.name
-                                }
+        let shown = model.librarySort.sorted(library.series.filter { HomeSearch.matches(model.homeSearch, $0.name) },
+                                             recent: library.index.recentSeries)
+        // No page title: the covers are the page.
+        return HomeScroll(header: { HomeControlsRow { controls } }) {
+            VStack(alignment: .leading, spacing: 28) {
+                if let missing = model.missingSeries {
+                    MissingSeriesNotice(series: missing) { library.presentAddPanel() }
+                }
+                if shown.isEmpty {
+                    ContentUnavailableView.search(text: model.homeSearch)
+                        .padding(.top, 40)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 170, maximum: 210), spacing: 24, alignment: .top)],
+                              alignment: .leading, spacing: 30) {
+                        ForEach(shown) { series in
+                            SeriesCard(model: model, series: series) {
+                                model.browsingSeries = series.name
                             }
                         }
                     }
                 }
-                .padding(22)
             }
-            Divider().overlay(.white.opacity(0.08))
-            FoldersFooter(model: model)
-                .padding(.horizontal, 22)
-                .padding(.vertical, 10)
+            .padding(.horizontal, 28)
+            .padding(.top, 2)
+            .padding(.bottom, 28)
         }
     }
 
-    private func heading(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.5))
-            .textCase(.uppercase)
+    @ViewBuilder
+    private var controls: some View {
+        Menu {
+            Picker("Sort By", selection: $model.librarySort) {
+                ForEach(LibrarySort.allCases, id: \.self) { sort in
+                    Text(sort.label).tag(sort)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("Sort", systemImage: "arrow.up.arrow.down")
+                .labelStyle(.iconOnly)
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .glassButtonStyle()
+        .fixedSize()
+        .help("Sort series: \(model.librarySort.label)")
+        AddMenu(model: model)
     }
 
     private var empty: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "books.vertical")
-                .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(.white.opacity(0.45))
-            Text("Your library is empty")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
-            Text("Add a folder of comics and it's read where it is — nothing is copied. Volumes, arcs and chapters are worked out from the file names.")
-                .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.55))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+        EmptyStateView(icon: "books.vertical", title: "Your library is empty",
+                       subtitle: "Paste a link to pull in a series, or add comics you already have.") {
             if let missing = model.missingSeries {
                 Text("The open project is about \(missing).")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textSecondary)
             }
-            Button { library.presentAddPanel() } label: {
-                Label("Add Folder to Library…", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.top, 6)
-            Text("or drop a folder or a .cbz / .cbr file on the window")
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.4))
+            ImportBar(model: model)
+                .padding(.top, 4)
+            Button("or add a folder of comics you own…") { library.presentAddPanel() }
+                .buttonStyle(.plain)
+                .font(Typography.caption)
+                .foregroundStyle(Palette.textTertiary)
+                .padding(.top, 2)
         }
+        .frame(maxWidth: 420)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -119,96 +111,200 @@ struct MissingSeriesNotice: View {
             }
             Spacer()
             Button("Add Folder…", action: add)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .buttonStyle(PrimaryButtonStyle())
         }
         .foregroundStyle(.white)
         .padding(14)
-        .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
+        .glassPanel(cornerRadius: Radius.medium)
     }
 }
 
-private struct ContinueCard: View {
-    @Bindable var model: ReaderModel
-    let series: Series
-    let item: LibraryItem
-    @State private var hovered = false
-
-    var body: some View {
-        Button { model.showsHome = false; model.open(item: item) } label: {
-            HStack(spacing: 10) {
-                CoverView(model: model, itemID: item.id)
-                    .frame(width: 54, height: 76)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(series.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(item.displayName)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(1)
-                    let spread = model.library.position(for: item)
-                    Text(spread > 0 ? "spread \(spread + 1)" : "from the start")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.45))
-                }
-                .frame(width: 150, alignment: .leading)
-            }
-            .padding(8)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(hovered ? 0.1 : 0.05)))
-            .contentShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
-    }
-}
-
+/// A series as its cover, standing on its own the way a book does on a
+/// shelf — no card around it — with its name and size underneath, and
+/// where the reader is up to on the cover once it's been started.
 private struct SeriesCard: View {
     @Bindable var model: ReaderModel
     let series: Series
     let open: () -> Void
     @State private var hovered = false
 
+    /// "Ch. 931", for a series that's been started.
+    private var upTo: String? {
+        guard model.library.index.lastRead[series.name] != nil,
+              let item = model.library.continueItem(in: series) else { return nil }
+        return item.label
+    }
+
     var body: some View {
+        let isOpen = model.series?.name == series.name
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 8) {
-                CoverView(model: model, itemID: series.items.first?.id)
-                    .frame(height: 190)
+            VStack(alignment: .leading, spacing: 9) {
+                CoverView(model: model, itemID: series.items.first?.id, fill: true)
+                    .frame(height: 270)
                     .frame(maxWidth: .infinity)
-                Text(series.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Text(series.summary)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .lineLimit(1)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.medium))
+                    .overlay(alignment: .bottomTrailing) {
+                        if let upTo {
+                            Text(upTo)
+                                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(Palette.textPrimary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .glassCapsule()
+                                .padding(8)
+                        }
+                    }
+                    .overlay(RoundedRectangle(cornerRadius: Radius.medium)
+                        .strokeBorder(isOpen ? Palette.accent : Color.white.opacity(0.08), lineWidth: isOpen ? 1.5 : 1))
+                    .shadow(color: .black.opacity(hovered ? 0.55 : 0.35), radius: hovered ? 16 : 10, y: hovered ? 10 : 4)
+                    .scaleEffect(hovered ? 1.04 : 1)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovered)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(series.name)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Palette.textPrimary)
+                            .lineLimit(1)
+                        if let progress = model.library.remoteDownloadProgress[series.name] {
+                            DownloadProgressBadge(progress: progress)
+                        }
+                    }
+                    Text(series.summary)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textTertiary)
+                        .lineLimit(1)
+                }
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(hovered ? 0.1 : 0.05)))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(model.series?.name == series.name ? Color.accentColor : .clear, lineWidth: 2))
-            .contentShape(RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .onHover { inside in
+            hovered = inside
+            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
         .contextMenu {
             Button("Read") { model.read(series) }
-            Button("New Project…") { model.browsingSeries = series.name; model.wantsNewProject = true }
+            Button("New Project…") { model.requestNewProject(series: series.name) }
+            if model.library.isRemoteSeries(series) {
+                Divider()
+                Button("Remove Series", role: .destructive) {
+                    if model.series?.name == series.name { model.closeComicToHome() }
+                    model.library.removeRemoteSeries(series)
+                }
+            }
         }
     }
 }
 
-/// The folders being watched, with a way to stop watching one.
-struct FoldersFooter: View {
+/// Next to a series' name while its chapters are prefetching: a sliver of a
+/// bar and a count while it runs, a checkmark for a moment once every
+/// chapter has settled — proof the whole series downloaded, not just the
+/// one chapter someone happened to open.
+private struct DownloadProgressBadge: View {
+    let progress: Library.DownloadProgress
+
+    var body: some View {
+        if progress.isComplete {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.green)
+                .help("Every chapter downloaded")
+        } else {
+            HStack(spacing: 4) {
+                ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                    .progressViewStyle(.linear)
+                    .frame(width: 40)
+                Text("\(progress.done)/\(progress.total)")
+                    .font(.system(size: 10, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Palette.textSecondary)
+            }
+            .help("Downloading chapters — \(progress.done) of \(progress.total) so far")
+        }
+    }
+}
+
+/// A link to pull a series in from the web — inline when the library is
+/// empty and it's the way in, and in `ImportLinkSheet` otherwise.
+struct ImportBar: View {
+    @Bindable var model: ReaderModel
+    @State private var urlString = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "link")
+                .font(.system(size: 15))
+                .foregroundStyle(.white.opacity(0.35))
+            TextField("Paste a link to import a series", text: $urlString)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .focused($focused)
+                .disabled(model.isAddingRemoteSource)
+                .onSubmit(submit)
+            if model.isAddingRemoteSource {
+                ProgressView()
+                    .controlSize(.small)
+            } else if !urlString.trimmingCharacters(in: .whitespaces).isEmpty {
+                Button("Add", action: submit)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .glassPanel(cornerRadius: Radius.large)
+        .frame(maxWidth: 640)
+        .onAppear { focused = true }
+    }
+
+    private func submit() {
+        let value = urlString.trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty, !model.isAddingRemoteSource else { return }
+        Task {
+            await model.addRemoteSource(urlString: value)
+            if model.errorMessage == nil { urlString = "" }
+        }
+    }
+}
+
+/// "Import from Link…": the import bar on its own, with a word on what it
+/// takes. Closes itself once a series has come in.
+struct ImportLinkSheet: View {
     @Bindable var model: ReaderModel
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "folder")
-                .foregroundStyle(.white.opacity(0.5))
-            Menu {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Import from Link")
+                .font(.headline)
+            Text("Paste a link to a series or one of its chapters. It’s added to your library, and its chapters download in the background.")
+                .font(Typography.body)
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ImportBar(model: model)
+            HStack {
+                Spacer()
+                Button("Cancel") { model.isImportingLink = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+    }
+}
+
+/// Bringing comics in — from a link or a folder — plus, once there's
+/// something watched, the management that goes with it (revealing or
+/// removing a folder, rescanning).
+private struct AddMenu: View {
+    @Bindable var model: ReaderModel
+
+    var body: some View {
+        Menu {
+            Button("Import from Link…") { model.isImportingLink = true }
+            Button("Add Comics Folder…") { model.library.presentAddPanel() }
+            if !model.library.roots.isEmpty {
+                Divider()
                 ForEach(model.library.roots, id: \.self) { root in
                     Menu(root.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) {
                         Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([root]) }
@@ -216,20 +312,15 @@ struct FoldersFooter: View {
                     }
                 }
                 Divider()
-                Button("Add Folder…") { model.library.presentAddPanel() }
                 Button("Rescan") { model.library.rescan() }
-            } label: {
-                let count = model.library.roots.count
-                Text("\(count) folder\(count == 1 ? "" : "s") watched")
-                    .foregroundStyle(.white.opacity(0.7))
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            Spacer()
-            let series = model.library.series.count
-            Text("\(series) series · \(model.library.series.reduce(0) { $0 + $1.items.count }) items")
-                .foregroundStyle(.white.opacity(0.5))
+        } label: {
+            Label("Add", systemImage: "plus")
         }
-        .font(.system(size: 12))
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .glassButtonStyle()
+        .fixedSize()
+        .help("Add comics to your library")
     }
 }

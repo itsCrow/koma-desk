@@ -308,6 +308,7 @@ private final class SpreadDocumentView: NSView {
             overlay.preferredInteractionTypes = [.textSelection, .dataDetectors]
             // No floating Live Text button in the corner of every page.
             overlay.isSupplementaryInterfaceHidden = true
+            Lettering.overlays.add(overlay)
             addSubview(overlay)
             return overlay
         }

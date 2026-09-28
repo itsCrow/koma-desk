@@ -130,3 +130,85 @@ struct LibraryScannerTests {
         #expect(series.items.map(\.chapter) == [1, 19, 24, 0, 14, 19])
     }
 }
+
+@Suite("Remote sources: identity, and reading old libraries")
+struct RemoteSourceTests {
+    @Test("A library.json saved before remote sources existed still opens")
+    func decodesPreRemoteSourceFormat() throws {
+        // The exact shape LibraryIndex/LibraryItem wrote before `source` on
+        // an item and `remoteSeries`/`remoteSources` on the index existed —
+        // no such keys at all, not merely null ones.
+        let json = """
+        {
+          "version": 1,
+          "roots": [],
+          "series": [
+            {
+              "name": "Berserk",
+              "items": [
+                {
+                  "id": "Berserk v01 (2003) (Digital).cbz|100",
+                  "url": "file:///Users/reader/Comics/Berserk%20v01%20(2003)%20(Digital).cbz",
+                  "series": "Berserk",
+                  "volume": 1,
+                  "title": "Berserk v01 (2003) (Digital)",
+                  "fileSize": 100
+                }
+              ]
+            }
+          ],
+          "positions": {"Berserk v01 (2003) (Digital).cbz|100": 12},
+          "lastRead": {"Berserk": "Berserk v01 (2003) (Digital).cbz|100"},
+          "recentSeries": ["Berserk"],
+          "covers": {}
+        }
+        """
+        let index = try JSONDecoder().decode(LibraryIndex.self, from: Data(json.utf8))
+        #expect(index.remoteSeries.isEmpty)
+        #expect(index.remoteSources.isEmpty)
+        let item = try #require(index.series.first?.items.first)
+        #expect(item.source == .local)
+        #expect(item.volume == 1)
+        #expect(item.chapter == nil)
+        #expect(item.arc == nil)
+        #expect(item.fileSize == 100)
+        #expect(index.positions[item.id] == 12)
+    }
+
+    @Test("A remote item's id depends only on where it comes from")
+    func remoteItemIdentity() {
+        let manifest = URL(string: "https://example.com/manifest.json")!
+        let a = LibraryItem(remote: .manifest(manifestURL: manifest, chapterKey: "5"), series: "S",
+                             volume: nil, chapter: 5, title: "", arc: nil, displayURL: manifest)
+        let b = LibraryItem(remote: .manifest(manifestURL: manifest, chapterKey: "5"), series: "S",
+                             volume: nil, chapter: 5, title: "", arc: nil, displayURL: manifest)
+        #expect(a.id == b.id)
+
+        let differentChapter = LibraryItem(remote: .manifest(manifestURL: manifest, chapterKey: "6"), series: "S",
+                                            volume: nil, chapter: 6, title: "", arc: nil, displayURL: manifest)
+        #expect(a.id != differentChapter.id)
+
+        let chapterURL = URL(string: "https://example.com/chapters/1")!
+        let site = LibraryItem(remote: .site(site: "weebcentral", chapterURL: chapterURL), series: "S",
+                                volume: nil, chapter: 1, title: "", arc: nil, displayURL: chapterURL)
+        #expect(site.id != a.id)
+    }
+
+    @Test("remoteSeries survives a rescan overwriting series")
+    func remoteSeriesSurvivesRescan() {
+        let manifest = URL(string: "https://example.com/manifest.json")!
+        let remoteItem = LibraryItem(remote: .manifest(manifestURL: manifest, chapterKey: "1"), series: "Remote Manga",
+                                      volume: nil, chapter: 1, title: "Ch. 1", arc: nil, displayURL: manifest)
+        var index = LibraryIndex(series: [Series(name: "Local", items: [])],
+                                  remoteSeries: [Series(name: "Remote Manga", items: [remoteItem])])
+
+        // What Library.rescan() does: replace `series` wholesale from a
+        // fresh directory scan. `remoteSeries` is a separate array, and a
+        // scan never touches it.
+        index.series = [Series(name: "Local Updated", items: [])]
+
+        #expect(index.allSeries.map(\.name) == ["Local Updated", "Remote Manga"])
+        #expect(index.series(named: "Remote Manga")?.items.first?.id == remoteItem.id)
+        #expect(index.item(id: remoteItem.id) == remoteItem)
+    }
+}

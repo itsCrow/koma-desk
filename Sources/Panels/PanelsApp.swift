@@ -13,7 +13,6 @@ struct PanelsApp: App {
         // A two-page spread is about 1.4:1. The old default of 900x512 was
         // nearly 1.9:1, which letterboxed a quarter of the window into black.
         .defaultSize(width: 1280, height: 900)
-        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Project…") { model.requestNewProject() }
@@ -26,6 +25,8 @@ struct PanelsApp: App {
                     .keyboardShortcut("o", modifiers: [.command, .option])
                 Button("Add Folder to Library…") { model.library.presentAddPanel() }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
+                Button("Open URL…") { model.requestOpenURL() }
+                    .keyboardShortcut("u", modifiers: [.command, .shift])
             }
 
             CommandGroup(after: .newItem) {
@@ -48,16 +49,27 @@ struct PanelsApp: App {
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     .disabled(!model.hasComic)
                 Divider()
-                Button(model.isWritingInRange ? "End Page Range" : "Start Page Range") {
+                Button(model.hasScriptSelection ? "Link Selection to Pages on Screen"
+                       : model.isWritingInRange ? "End Page Range" : "Start Page Range") {
                     model.togglePageRange()
                 }
                     .keyboardShortcut("r")
-                    .disabled(model.project == nil || (!model.hasComic && !model.isWritingInRange))
+                    .disabled(model.project == nil || (!model.hasComic && (model.hasScriptSelection || !model.isWritingInRange)))
+                Button("Link Selection to Page…") { model.beginLinkingPages() }
+                    .keyboardShortcut("r", modifiers: [.command, .option])
+                    .disabled(model.project == nil || !model.hasScriptSelection)
                 Button("Extend Range to This Page") { model.extendPageRange() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(!model.canExtendPageRange)
                 Button("Remove Page Range") { model.removePageRange() }
                     .disabled(model.project == nil || !model.isWritingInRange)
+                Divider()
+                Picker("Script Mode", selection: $model.scriptMode) {
+                    ForEach(ScriptMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .disabled(model.project == nil)
                 Divider()
                 Button(model.showsScript ? "Hide Script" : "Show Script") { model.showsScript.toggle() }
                     .keyboardShortcut("s", modifiers: [.command, .option])
@@ -111,9 +123,11 @@ struct PanelsApp: App {
             }
 
             CommandMenu("Go") {
-                Button("Find in Comic…") { model.requestSearch() }
+                Button(model.isHomeVisible ? "Search Library and Projects" : "Find in Comic…") {
+                    if model.isHomeVisible { model.wantsHomeSearchFocus = true } else { model.requestSearch() }
+                }
                     .keyboardShortcut("f")
-                    .disabled(!model.hasComic)
+                    .disabled(!model.hasComic && !model.isHomeVisible)
                 Divider()
                 // Bare keys as menu shortcuts are claimed before a text view
                 // sees them, so they're withdrawn while the writer types.
@@ -152,8 +166,23 @@ struct PanelsApp: App {
                         Text(direction.label).tag(direction)
                     }
                 }
+                // Only means something when there's a facing page to be on
+                // the other side of — irrelevant to Single Page in either
+                // orientation.
+                .disabled(model.pageLayout == .singlePage)
                 Button("Flip Reading Direction") { model.toggleDirection() }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
+                    .disabled(model.pageLayout == .singlePage)
+                Picker("Page Layout", selection: $model.pageLayout) {
+                    ForEach(PageLayout.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                Picker("Reading Orientation", selection: $model.readingOrientation) {
+                    ForEach(ReadingOrientation.allCases, id: \.self) { orientation in
+                        Text(orientation.label).tag(orientation)
+                    }
+                }
                 Divider()
             }
         }
@@ -271,7 +300,15 @@ struct WindowConfigurator: NSViewRepresentable {
             guard let window = view.window else { return }
             window.appearance = NSAppearance(named: .darkAqua)
             window.backgroundColor = .black
+            // Lets the content draw under the traffic lights, rather than
+            // stopping at a titlebar band that reads as a separate strip.
+            // An empty unified toolbar draws its own band regardless of
+            // titlebar transparency, so there must be no toolbar at all.
+            window.toolbar = nil
+            window.styleMask.insert(.fullSizeContentView)
             window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.titlebarSeparatorStyle = .none
             shape(window, from: view, coordinator)
         }
         return view

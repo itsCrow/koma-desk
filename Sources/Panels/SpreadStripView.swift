@@ -85,6 +85,7 @@ final class SpreadStripView: NSView {
     /// that should show during a swipe.
     private static let gutter: CGFloat = 14
     private static let slideDuration: CFTimeInterval = 0.22
+    private static let crossfadeDuration: TimeInterval = 0.15
 
     private var centrePanel: SpreadScrollView?
     private var leftPanel: SpreadScrollView?
@@ -108,6 +109,18 @@ final class SpreadStripView: NSView {
     private var slideTo: CGFloat = 0
     private var slideStart: CFTimeInterval = 0
     private var slideCompletion: (() -> Void)?
+
+    /// A single page's keyboard/button turn: the incoming page fades in over
+    /// the outgoing one in place, rather than sliding past it. Tracked
+    /// separately from the slide, since it uses a plain `NSAnimationContext`
+    /// fade rather than the display-link-driven position tween.
+    private var isCrossfading = false
+    private var crossfadeOutgoing: SpreadScrollView?
+    private var crossfadeIncoming: SpreadScrollView?
+    private var crossfadeSide: ScreenSide?
+    /// Invalidates a stale completion handler when a crossfade is cut short
+    /// by another one starting before it finishes.
+    private var crossfadeGeneration = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -167,6 +180,13 @@ final class SpreadStripView: NSView {
 
     private func teardown() {
         finishSlideNow()
+        // Cancels outright rather than resolving through `promote` — the
+        // panels it would promote are about to be thrown away anyway.
+        isCrossfading = false
+        crossfadeOutgoing = nil
+        crossfadeIncoming = nil
+        crossfadeSide = nil
+        crossfadeGeneration += 1
         for panel in [leftPanel, centrePanel, rightPanel] { panel?.removeFromSuperview() }
         leftPanel = nil
         centrePanel = nil
@@ -263,7 +283,9 @@ final class SpreadStripView: NSView {
     /// still span the whole strip so a zoomed page can use the full window;
     /// they simply overlap, which is harmless now they're transparent.
     private func positionPanels() {
-        guard !isPositioning else { return }
+        // A crossfade manually places its two panels on top of each other —
+        // the usual left/right offset math would fight that mid-fade.
+        guard !isPositioning, !isCrossfading else { return }
         isPositioning = true
         defer { isPositioning = false }
 
@@ -306,7 +328,15 @@ final class SpreadStripView: NSView {
 
     /// A panel that hasn't been laid out yet has no width to report; treat it
     /// as the centre's until it does.
+    ///
+    /// Single pages are spaced by the full window instead: there's no facing
+    /// page to keep a gutter against, and a portrait page's actual displayed
+    /// width is both much narrower than the window and different from one
+    /// page to the next, which made the step between turns wobble instead of
+    /// reading as one consistent distance. A constant step is what makes a
+    /// one-page-at-a-time turn feel like a turn rather than a stumble.
     private func contentWidth(of panel: SpreadScrollView?) -> CGFloat {
+        if model?.pageLayout == .singlePage { return bounds.width }
         let width = panel?.displayedContentWidth ?? 0
         if width > 0 { return width }
         let centre = centrePanel?.displayedContentWidth ?? 0
@@ -331,18 +361,24 @@ final class SpreadStripView: NSView {
     /// Called by a panel that has run out of room to pan. Returns true when the
     /// strip takes the gesture over.
     func beginSwipe(with event: NSEvent) -> Bool {
-        guard !isSwiping, !isAnimating else { return false }
+        guard !isSwiping, !isAnimating, let model else { return false }
         ensureNeighbourPanels()
-        guard leftPanel != nil || rightPanel != nil else { return false }
+        // A side with no panel inside this comic can still have something to
+        // reveal — the next or previous chapter — and the swipe needs to be
+        // trackable there too, not just resisted, for it to ever complete.
+        let canRevealLeft = leftPanel != nil || wouldAdvance(revealing: .left, in: model)
+        let canRevealRight = rightPanel != nil || wouldAdvance(revealing: .right, in: model)
+        guard canRevealLeft || canRevealRight else { return false }
 
         isSwiping = true
         positionPanels()
-        // Clamped to zero on a side with nothing to show, which is what gives
-        // the damped resist at the first and last page.
+        // Clamped to zero on a side with nothing to show at all — inside
+        // this comic or in another chapter — which is what gives the
+        // damped resist at the very start or end of the series.
         event.trackSwipeEvent(
             options: .lockDirection,
-            dampenAmountThresholdMin: rightPanel != nil ? -1 : 0,
-            max: leftPanel != nil ? 1 : 0
+            dampenAmountThresholdMin: canRevealRight ? -1 : 0,
+            max: canRevealLeft ? 1 : 0
         ) { [weak self] amount, _, isComplete, _ in
             guard let self else { return }
             // Every intermediate value moves the strip — this is what makes the
@@ -364,10 +400,29 @@ final class SpreadStripView: NSView {
         return true
     }
 
+    /// Whether revealing this side, with no neighbouring spread left inside
+    /// the current comic, would still carry on into another chapter — the
+    /// same direction-to-side mapping `pressedLeftArrow`/`pressedRightArrow`
+    /// already use.
+    private func wouldAdvance(revealing side: ScreenSide, in model: ReaderModel) -> Bool {
+        switch side {
+        case .left: return model.direction == .rightToLeft ? model.hasNextItem : model.hasPreviousItem
+        case .right: return model.direction == .rightToLeft ? model.hasPreviousItem : model.hasNextItem
+        }
+    }
+
     /// Finishes a swipe: promotes the revealed panel, then lets the model catch up.
     private func commit(revealing side: ScreenSide) {
         guard promote(revealing: side) else {
+            // No neighbouring spread within this comic — the same swipe
+            // that would otherwise have bounced at the last page instead
+            // asks the model whether there's a next (or previous) chapter
+            // to carry on into, exactly as the arrow keys already do.
             offset = 0
+            switch side {
+            case .left: model?.pressedLeftArrow()
+            case .right: model?.pressedRightArrow()
+            }
             return
         }
         // Order matters. The strip already shows the new spread, so when the
@@ -410,12 +465,16 @@ final class SpreadStripView: NSView {
 
     // MARK: - Slide animation for keyboard and button turns
 
-    private var isAnimating: Bool { displayLink != nil }
+    private var isAnimating: Bool { displayLink != nil || isCrossfading }
 
     private func slide(revealing side: ScreenSide, in model: ReaderModel) {
         ensureNeighbourPanels()
-        guard (side == .left ? leftPanel : rightPanel) != nil else {
+        guard let incoming = (side == .left ? leftPanel : rightPanel) else {
             rebuild(at: model.spreadIndex, in: model)
+            return
+        }
+        if model.pageLayout == .singlePage {
+            crossfade(revealing: side, incoming: incoming)
             return
         }
         startSlide(to: side == .left ? 1 : -1) { [weak self] in
@@ -462,5 +521,61 @@ final class SpreadStripView: NSView {
 
         displayLink = nil
         positionPanels()
+    }
+
+    // MARK: - Crossfade for single-page keyboard and button turns
+
+    /// A single page just appears in place, replacing the one before it —
+    /// there's no facing page to slide past, so there's nothing for a
+    /// sideways carousel motion to be doing. Still promotes through the same
+    /// `promote(revealing:)` the slide uses, so a neighbour is ready the
+    /// moment the reader swipes right after.
+    private func crossfade(revealing side: ScreenSide, incoming: SpreadScrollView) {
+        finishCrossfadeNow()
+        guard let outgoing = centrePanel else { return }
+        isCrossfading = true
+        crossfadeOutgoing = outgoing
+        crossfadeIncoming = incoming
+        crossfadeSide = side
+        crossfadeGeneration += 1
+        let generation = crossfadeGeneration
+
+        incoming.setFrameSize(bounds.size)
+        incoming.setFrameOrigin(.zero)
+        incoming.alphaValue = 0
+        incoming.isHidden = false
+        outgoing.alphaValue = 1
+        addSubview(incoming, positioned: .above, relativeTo: outgoing)
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.crossfadeDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            incoming.animator().alphaValue = 1
+            outgoing.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                // A later turn may already have cut this one short and
+                // started its own — this stale callback must not resolve it.
+                guard let self, self.crossfadeGeneration == generation else { return }
+                self.finishCrossfadeNow()
+            }
+        })
+    }
+
+    /// Jumps a crossfade straight to its end — how one in flight is resolved
+    /// if another turn arrives before it finishes, the same "never left
+    /// stranded" idea `finishSlideNow` uses for the slide.
+    private func finishCrossfadeNow() {
+        guard isCrossfading, let outgoing = crossfadeOutgoing,
+              let incoming = crossfadeIncoming, let side = crossfadeSide
+        else { return }
+        isCrossfading = false
+        crossfadeOutgoing = nil
+        crossfadeIncoming = nil
+        crossfadeSide = nil
+        crossfadeGeneration += 1
+        incoming.alphaValue = 1
+        outgoing.alphaValue = 1
+        promote(revealing: side)
     }
 }

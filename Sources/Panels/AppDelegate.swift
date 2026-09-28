@@ -1,5 +1,6 @@
 import AppKit
 import ComicArchive
+import RemoteComicSource
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// True while a file handed over by Finder is being opened.
@@ -17,11 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // from inside the .app bundle, which otherwise leaves it agent-like.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        MainActor.assumeIsolated { Lettering.installCopyMonitor(model: ReaderModel.shared) }
 
-        // Every comic read leaves its extracted pages behind. Trim the oldest
-        // ones at launch, while nothing is open and nothing can be in use.
+        // Every comic read leaves its extracted (or downloaded) pages behind.
+        // Trim the oldest ones at launch, while nothing is open and nothing
+        // can be in use.
         Task.detached(priority: .background) {
             ComicArchive.pruneCache()
+            RemoteComicSource.pruneCache()
         }
     }
 

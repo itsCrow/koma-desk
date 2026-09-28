@@ -27,13 +27,19 @@ let package = Package(
         // The library: folders of comics understood as series, volumes, arcs
         // and chapters. No UI.
         .target(name: "ComicLibrary", dependencies: ["ComicArchive"]),
+        // Reading a comic from the web: a known site, or a generic JSON
+        // manifest. No UI, and no dependency on ComicArchive/ComicLibrary —
+        // Panels is the only place that glues them together.
+        .target(name: "RemoteComicSource"),
         // The SwiftUI reader.
-        .executableTarget(name: "Panels", dependencies: ["ComicArchive", "PageSearch", "PageCapture", "PanelsProject", "ComicLibrary", "PanelsFormat"]),
+        .executableTarget(name: "Panels", dependencies: ["ComicArchive", "PageSearch", "PageCapture", "PanelsProject", "ComicLibrary", "PanelsFormat", "RemoteComicSource"]),
         .testTarget(name: "ComicArchiveTests", dependencies: ["ComicArchive"]),
         .testTarget(name: "PageSearchTests", dependencies: ["PageSearch", "ComicArchive", "PanelsFormat"]),
         .testTarget(name: "PageCaptureTests", dependencies: ["PageCapture", "ComicArchive", "PanelsFormat"]),
         .testTarget(name: "PanelsProjectTests", dependencies: ["PanelsProject", "PanelsFormat"]),
         .testTarget(name: "ComicLibraryTests", dependencies: ["ComicLibrary"]),
+        .testTarget(name: "RemoteComicSourceTests", dependencies: ["RemoteComicSource"],
+                    resources: [.copy("Fixtures")]),
         // The reader's model driven the way the menus drive it.
         .testTarget(name: "PanelsTests", dependencies: ["Panels", "PanelsProject", "ComicLibrary", "ComicArchive", "PanelsFormat"]),
     ]

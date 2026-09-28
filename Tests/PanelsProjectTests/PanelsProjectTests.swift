@@ -57,6 +57,67 @@ struct ScriptMarkdownTests {
         #expect(ScriptMarkdown.citationID(from: url) == "zz9pza")
         #expect(ScriptMarkdown.citationID(from: URL(string: "https://example.com")!) == nil)
     }
+
+    @Test("Bold and italic round-trip through star runs, alone and together")
+    func boldAndItalic() {
+        let text = "*Hushed.* **He roars.** ***Both at once.*** Plain again."
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks == [.paragraph([
+            .styledText(TextRun(text: "Hushed.", italic: true)),
+            .text(" "),
+            .styledText(TextRun(text: "He roars.", bold: true)),
+            .text(" "),
+            .styledText(TextRun(text: "Both at once.", bold: true, italic: true)),
+            .text(" Plain again."),
+        ])])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+    }
+
+    @Test("A highlight and a text color nest inside emphasis, and round-trip")
+    func highlightAndColor() {
+        let text = "Plain **{hl:yellow}{fg:blue}both{/fg}{/hl}** and {hl:pink}just a highlight{/hl}."
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks == [.paragraph([
+            .text("Plain "),
+            .styledText(TextRun(text: "both", bold: true, highlight: .yellow, textColor: .blue)),
+            .text(" and "),
+            .styledText(TextRun(text: "just a highlight", highlight: .pink)),
+            .text("."),
+        ])])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+    }
+
+    @Test("A literal asterisk in prose is escaped, not read as emphasis")
+    func literalAsterisk() {
+        let blocks: [ScriptBlock] = [.paragraph([.text("5 * 3 = 15, *not* italic on its own")])]
+        let text = ScriptMarkdown.serialize(blocks)
+        #expect(ScriptMarkdown.parse(text) == blocks)
+    }
+
+    @Test("A third heading level — Subheading — parses and round-trips")
+    func subheading() {
+        let text = "### A quieter beat"
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks == [.heading(level: 3, [.text("A quieter beat")])])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+        #expect(blocks[0].headingLevel == 3)
+    }
+
+    @Test("Alignment is its own marker, independent of the span marker, and round-trips")
+    func alignment() {
+        let text = """
+        <align:center> Centered.
+        <span:k7m2pq> <align:trailing> Right-aligned, and in a block of writing.
+        Left is the default and is never written.
+        """
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks == [
+            .paragraph([.text("Centered.")], alignment: .center),
+            .paragraph([.text("Right-aligned, and in a block of writing.")], span: "k7m2pq", alignment: .trailing),
+            .paragraph([.text("Left is the default and is never written.")]),
+        ])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+    }
 }
 
 @Suite("Page ranges in a script")
@@ -151,6 +212,56 @@ struct ScriptSpanTests {
         // A label with no matching range is simply not used.
         #expect(ScriptMarkdown.plainText(blocks, spanLabels: ["other1": "pp. 1–2"])
                 == ScriptMarkdown.plainText(blocks))
+    }
+}
+
+@Suite("Beats in a script")
+struct ScriptBeatTests {
+    @Test("A beat marker sits on its own line, independent of a span marker, and round-trips")
+    func markers() {
+        let text = "<span:aaa111> <beat:bbb222> Cold open begins here."
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks[0].spanID == "aaa111")
+        #expect(blocks[0].beatID == "bbb222")
+        #expect(blocks[0].inlines == [.text("Cold open begins here.")])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+    }
+
+    @Test("A beat marker coexists with a span and an alignment marker, in order")
+    func fullMarkerOrder() {
+        let text = "<span:aaa111> <beat:bbb222> <align:center> Centered and both."
+        let blocks = ScriptMarkdown.parse(text)
+        #expect(blocks[0].spanID == "aaa111")
+        #expect(blocks[0].beatID == "bbb222")
+        #expect(blocks[0].alignment == .center)
+        #expect(blocks[0].inlines == [.text("Centered and both.")])
+        #expect(ScriptMarkdown.serialize(blocks) == text)
+    }
+
+    @Test("Prose that looks like a beat marker stays prose")
+    func markerEscapes() {
+        #expect(ScriptMarkdown.parse("<beat:abc123> hello")[0].beatID == "abc123")
+        let typed: [ScriptBlock] = [.paragraph([.text("<beat:abc123> hello")])]
+        let serialized = ScriptMarkdown.serialize(typed)
+        #expect(serialized == "\\<beat:abc123> hello")
+        #expect(ScriptMarkdown.parse(serialized) == typed)
+
+        for line in ["<beat:abc123>hello", "<beat:abc123 hello", "<beat:> hello",
+                     "<beat:has a space> hi", "<beet:abc123> hello", "<beat:abc123>"] {
+            #expect(ScriptMarkdown.parse(line)[0].beatID == nil, "\(line) should be prose")
+        }
+    }
+
+    @Test("Beats come back in the order they first appear, each once")
+    func order() {
+        let text = """
+        <beat:aaa111> Cold open.
+        No beat here.
+        <beat:bbb222> Act one.
+        <span:xxx999> <beat:aaa111> A duplicate marker, same id.
+        """
+        #expect(ScriptMarkdown.beatIDs(in: text) == ["aaa111", "bbb222"])
+        #expect(ScriptMarkdown.beatIDs(in: "nothing here") == [])
     }
 }
 
@@ -368,6 +479,155 @@ struct ProjectStoreTests {
         #expect(ScriptMarkdown.spanIDs(in: back.script) == ["k7m2pq"])
     }
 
+    @Test("Beats round-trip, and replace rather than pile up")
+    func beatsRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Beats.panelsproject", isDirectory: true)
+        var loaded = try ProjectStore.create(at: url, name: "Beats", series: "Berserk")
+
+        let beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
+        loaded.manifest.store(beat)
+        #expect(loaded.manifest.beats.count == 1)
+        // Checking it off keeps one record, not two.
+        var done = beat
+        done.isDone = true
+        loaded.manifest.store(done)
+        #expect(loaded.manifest.beats.count == 1)
+        #expect(loaded.manifest.beats[0].isDone)
+        loaded.script = "<beat:k7m2pq> The eclipse begins."
+        try ProjectStore.save(loaded, to: url)
+
+        let back = try ProjectStore.load(url)
+        #expect(back.manifest.beats == [done])
+        #expect(back.manifest.beat(id: "k7m2pq")?.title == "Cold Open")
+        #expect(back.manifest.beat(id: "nope12") == nil)
+        #expect(ScriptMarkdown.beatIDs(in: back.script) == ["k7m2pq"])
+
+        var manifest = back.manifest
+        manifest.removeBeat(id: "k7m2pq")
+        #expect(manifest.beats.isEmpty)
+    }
+
+    @Test("A beat's tags round-trip, in order, with their own color")
+    func beatTagsRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Tags.panelsproject", isDirectory: true)
+        var loaded = try ProjectStore.create(at: url, name: "Tags", series: "Berserk")
+
+        var beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
+        beat.tags = [
+            Tag(id: "aaa111", text: "green screen", color: .green),
+            Tag(id: "bbb222", text: "zoom", color: .blue),
+        ]
+        loaded.manifest.store(beat)
+        loaded.script = "<beat:k7m2pq> The eclipse begins."
+        try ProjectStore.save(loaded, to: url)
+
+        let back = try ProjectStore.load(url)
+        let restored = try #require(back.manifest.beat(id: "k7m2pq"))
+        #expect(restored.tags.map(\.text) == ["green screen", "zoom"])
+        #expect(restored.tags.map(\.color) == [.green, .blue])
+
+        // Removing one, keeping the other.
+        var updated = restored
+        updated.tags.removeAll { $0.id == "aaa111" }
+        loaded.manifest.store(updated)
+        #expect(loaded.manifest.beat(id: "k7m2pq")?.tags.map(\.text) == ["zoom"])
+    }
+
+    @Test("A beat saved before tags existed loads with none, not a decode failure")
+    func beatWithoutTagsKeyDecodes() throws {
+        let json = """
+        {
+          "id" : "k7m2pq",
+          "title" : "Cold Open",
+          "isDone" : false,
+          "date" : "2026-09-16T08:37:40Z"
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let beat = try decoder.decode(Beat.self, from: Data(json.utf8))
+        #expect(beat.title == "Cold Open")
+        #expect(beat.tags.isEmpty)
+        #expect(beat.color == nil)
+    }
+
+    @Test("A beat's own color round-trips, and defaults to none")
+    func beatColorRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Color.panelsproject", isDirectory: true)
+        var loaded = try ProjectStore.create(at: url, name: "Color", series: "Berserk")
+
+        var beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
+        #expect(beat.color == nil)
+        beat.color = .pink
+        loaded.manifest.store(beat)
+        loaded.script = "<beat:k7m2pq> The eclipse begins."
+        try ProjectStore.save(loaded, to: url)
+
+        let back = try ProjectStore.load(url)
+        #expect(back.manifest.beat(id: "k7m2pq")?.color == .pink)
+
+        // Setting it back to nil (the rail's "None" option) round-trips too.
+        var reset = try #require(back.manifest.beat(id: "k7m2pq"))
+        reset.color = nil
+        loaded.manifest.store(reset)
+        try ProjectStore.save(loaded, to: url)
+        #expect(try ProjectStore.load(url).manifest.beat(id: "k7m2pq")?.color == nil)
+    }
+
+    @Test("A beat saved before a color existed loads with none, not a decode failure")
+    func beatWithoutColorKeyDecodes() throws {
+        let json = """
+        {
+          "id" : "k7m2pq",
+          "title" : "Cold Open",
+          "isDone" : false,
+          "date" : "2026-09-16T08:37:40Z",
+          "tags" : []
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let beat = try decoder.decode(Beat.self, from: Data(json.utf8))
+        #expect(beat.title == "Cold Open")
+        #expect(beat.color == nil)
+    }
+
+    @Test("A version-4 project opens and comes forward, with no beats yet")
+    func upgradesFromVersion4() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Old.panelsproject", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+
+        // Written by hand exactly as version 4 wrote it — no "beats" key.
+        let v4 = """
+        {
+          "citations" : [],
+          "items" : [],
+          "name" : "turtle school",
+          "series" : "Dragon Ball + Super",
+          "spans" : [],
+          "version" : 4
+        }
+        """
+        try Data(v4.utf8).write(to: ProjectStore.manifestURL(of: url))
+
+        let manifest = try ProjectStore.loadManifest(url)
+        #expect(manifest.version == ProjectManifest.currentVersion)
+        #expect(manifest.name == "turtle school")
+        #expect(manifest.beats.isEmpty)
+    }
+
     @Test("A project from the earlier format is refused, not half-read")
     func refusesOldFormat() throws {
         let dir = FileManager.default.temporaryDirectory
@@ -531,5 +791,38 @@ struct ProjectStoreTests {
         let ids = (0..<200).map { _ in ProjectManifest.makeID() }
         #expect(ids.allSatisfy { $0.count == 6 && $0.allSatisfy { $0.isLetter || $0.isNumber } })
         #expect(Set(ids).count > 195)
+    }
+}
+
+@Suite("Linking writing to pages")
+struct LinkingPagesTests {
+    @Test("Pages read the way a writer types them")
+    func parsePages() {
+        #expect(PageSpan.parsePages("42") == 42...42)
+        #expect(PageSpan.parsePages("42-45") == 42...45)
+        #expect(PageSpan.parsePages("42–45") == 42...45)
+        #expect(PageSpan.parsePages(" 42 — 45 ") == 42...45)
+        #expect(PageSpan.parsePages("pp. 42–45") == 42...45)
+        #expect(PageSpan.parsePages("p. 7") == 7...7)
+        // Backwards is still a range, just put in order.
+        #expect(PageSpan.parsePages("45-42") == 42...45)
+        #expect(PageSpan.parsePages("0") == nil)
+        #expect(PageSpan.parsePages("") == nil)
+        #expect(PageSpan.parsePages("42-") == nil)
+        #expect(PageSpan.parsePages("1-2-3") == nil)
+        #expect(PageSpan.parsePages("forty") == nil)
+    }
+
+    @Test("Relinking the middle of a block leaves its ends in the old one")
+    func relinkMiddle() {
+        var blocks = ScriptMarkdown.parse("""
+        <span:k7m2pq> The eclipse begins.
+        <span:k7m2pq> Griffith makes his choice.
+        <span:k7m2pq> The brand.
+        """)
+        blocks[1].spanID = "q3wz8n"
+        let text = ScriptMarkdown.serialize(blocks)
+        #expect(ScriptMarkdown.parse(text).map(\.spanID) == ["k7m2pq", "q3wz8n", "k7m2pq"])
+        #expect(ScriptMarkdown.spanIDs(in: text) == ["k7m2pq", "q3wz8n"])
     }
 }

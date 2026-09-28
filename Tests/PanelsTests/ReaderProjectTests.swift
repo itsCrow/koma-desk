@@ -170,6 +170,70 @@ struct ReaderProjectTests {
         #expect(scratch.library.isEmpty)
     }
 
+    @Test("Page Layout decides how pages pair into spreads; Reading Orientation never does")
+    func pageLayoutControlsPairing() async throws {
+        guard let path = Self.comicPath else {
+            withKnownIssue("Set PANELS_TEST_CBR to run.") { Issue.record("skipped") }
+            return
+        }
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+        model.pageLayout = .twoPage
+        model.addToLibrary(URL(fileURLWithPath: path))
+        #expect(await Self.wait { model.hasComic })
+
+        let pageCount = model.pages.count
+        let pairedSpreadCount = model.spreads.count
+        // A real, multi-page comic pairs at least some of the time, so this
+        // is an actual check rather than counts that would match anyway.
+        #expect(pairedSpreadCount < pageCount)
+
+        model.pageLayout = .singlePage
+        #expect(model.spreads.count == pageCount)
+        #expect(model.spreads.allSatisfy { $0.pageIndices.count == 1 })
+
+        // Orientation only changes how a spread is shown, never which pages
+        // share one — flipping it must leave spreads and position untouched.
+        let spreadsBeforeOrientationChange = model.spreads
+        let spreadIndexBeforeOrientationChange = model.spreadIndex
+        model.readingOrientation = .vertical
+        #expect(model.spreads == spreadsBeforeOrientationChange)
+        #expect(model.spreadIndex == spreadIndexBeforeOrientationChange)
+        model.readingOrientation = .horizontal
+        #expect(model.spreads == spreadsBeforeOrientationChange)
+
+        model.pageLayout = .twoPage
+        #expect(model.spreads.count == pairedSpreadCount)
+    }
+
+    @Test("Switching Page Layout mid-chapter keeps the same page, not the start")
+    func pageLayoutSwitchPreservesPosition() async throws {
+        guard let path = Self.comicPath else {
+            withKnownIssue("Set PANELS_TEST_CBR to run.") { Issue.record("skipped") }
+            return
+        }
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+        model.pageLayout = .twoPage
+        model.addToLibrary(URL(fileURLWithPath: path))
+        #expect(await Self.wait { model.hasComic })
+
+        model.goTo(spread: 3)
+        let currentPage = try #require(model.currentSpread?.pageIndices.first)
+
+        // Single Page's spreads are indexed 1:1 with pages, so the page
+        // itself — not just "a" page — has to be the one still on screen.
+        model.pageLayout = .singlePage
+        #expect(model.currentSpread?.pageIndices == [currentPage])
+
+        // And back: two-page pairing may put that same page second in its
+        // spread rather than first, which is still "the same page."
+        model.pageLayout = .twoPage
+        #expect(model.currentSpread?.pageIndices.contains(currentPage) == true)
+    }
+
     @Test("A folder reads as one series: the last page turns into the next chapter, and back")
     func readThroughASeries() async throws {
         guard let path = Self.folderPath else {
@@ -345,6 +409,42 @@ struct ReaderProjectTests {
         #expect(await Self.wait(seconds: 5) { (try? ProjectStore.load(project.url))?.manifest.citations.count == 2 })
     }
 
+    @Test("Jumping to a citation or a page range leaves the extended writing area, so there's something to land on")
+    func jumpLeavesFocusedWriting() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let url = try scratch.projects.create(named: "Jumping", series: "Berserk")
+        scratch.model.openProject(at: url)
+        let project = try #require(scratch.model.project)
+
+        // Neither points at anything in the (empty) library, so both jumps
+        // take their existing "not in your library" path — no real comic
+        // needed just to prove the mode switch happens.
+        let citation = Citation(itemID: "missing.cbz|1", pageIndex: 0, pageNumbers: [1], text: "a shot")
+        project.manifest.citations.append(citation)
+        let span = PageSpan(id: "k7m2pq", itemID: "missing.cbz|1", firstPageIndex: 0,
+                            pageNumbers: [1], text: "a range")
+        project.manifest.store(span)
+
+        scratch.model.isFocusedWriting = true
+        scratch.model.jump(toCitation: citation.id)
+        #expect(scratch.model.isFocusedWriting == false)
+        #expect(scratch.model.errorMessage != nil)
+
+        scratch.model.isFocusedWriting = true
+        scratch.model.errorMessage = nil
+        scratch.model.jump(toSpan: span.id)
+        #expect(scratch.model.isFocusedWriting == false)
+        #expect(scratch.model.errorMessage != nil)
+
+        // A citation or span id nothing recognizes doesn't exist to jump to
+        // at all — no reason to interrupt the writing for it.
+        scratch.model.isFocusedWriting = true
+        scratch.model.jump(toCitation: "nope12")
+        scratch.model.jump(toSpan: "nope12")
+        #expect(scratch.model.isFocusedWriting == true)
+    }
+
     @Test("A comic that won't open leaves the model on the one still showing")
     func failedOpenKeepsIdentity() async throws {
         guard let path = Self.comicPath else {
@@ -486,6 +586,122 @@ struct ReaderProjectTests {
         // No comic is open in this test, so starting can't pick pages — the
         // point is that it tried to start rather than end.
         #expect(project.pendingSpanCommand != .end)
+    }
+
+    @Test("Selected writing is linked to pages whole paragraph by whole paragraph, and stops there")
+    func linkSelection() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: """
+        Before any of it.
+        The eclipse begins.
+        Griffith makes his choice.
+        Long after.
+        """, in: scratch)
+        let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|1", firstPageIndex: 41,
+                            pageNumbers: [42, 45], text: "Berserk, Vol. 13, pp. 42–45")
+        project.manifest.store(span)
+
+        // Part of the second line through part of the third.
+        let string = textView.string as NSString
+        let start = string.range(of: "eclipse").location
+        let end = string.range(of: "makes").location
+        let selection = NSRange(location: start, length: end - start)
+
+        // The request remembers what was selected; by the time it's answered
+        // the caret has gone somewhere else entirely.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        coordinator.applySpan(.link(span, selection: selection))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).map(\.spanID) == [nil, "k7m2pq", "k7m2pq", nil])
+
+        // Typing on at the end doesn't join it — it wasn't a block being written.
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        textView.insertText("\nAnd more.", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).map(\.spanID) == [nil, "k7m2pq", "k7m2pq", nil, nil])
+    }
+
+    @Test("With writing selected, the range key links it rather than starting a block")
+    func rangeKeyLinksSelection() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "The eclipse begins.", in: scratch)
+        let model = scratch.model
+
+        textView.setSelectedRange(NSRange(location: 4, length: 7))
+        coordinator.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification, object: textView))
+        #expect(model.hasScriptSelection)
+        // Writer mode offers both ways to link; no comic is open, so the pages
+        // on screen can't be one of them yet.
+        let items = coordinator.contextMenuItems(at: 5)
+        #expect(items.map(\.title).contains("Link to Page…"))
+        #expect(items.first { $0.title.hasPrefix("Link to Pages on Screen") }?.isEnabled == false)
+        model.togglePageRange()
+        #expect(project.pendingSpanCommand == nil)
+
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        coordinator.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification, object: textView))
+        #expect(!model.hasScriptSelection)
+        #expect(coordinator.contextMenuItems(at: 5).isEmpty)
+    }
+
+    @Test("Link to Page… makes a range for any comic, or changes an existing one's pages")
+    func linkToTypedPages() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (_, _, project) = try editor(script: "The eclipse begins.", in: scratch)
+        let model = scratch.model
+        let item = LibraryItem(url: URL(fileURLWithPath: "/tmp/Berserk v13.cbz"), series: "Berserk",
+                               volume: 13, chapter: nil, title: "Berserk v13", arc: nil, fileSize: 1)
+
+        let selection = NSRange(location: 0, length: 3)
+        model.beginLinkingPages(selection: selection)
+        let request = try #require(model.linkingPages)
+        model.finishLinkingPages(request, item: item, pages: 42...45)
+        #expect(model.linkingPages == nil)
+        let span = try #require(project.manifest.spans.first)
+        #expect(span.itemID == item.id)
+        #expect(span.firstPageIndex == 41)
+        #expect(span.pageNumbers == [42, 45])
+        #expect(span.text == "Berserk, Vol. 13, pp. 42–45")
+        #expect(project.manifest.items.map(\.itemID) == [item.id])
+        #expect(project.pendingSpanCommand == .link(span, selection: selection))
+        project.pendingSpanCommand = nil
+
+        // Changing the pages keeps the id, so the writing needn't change.
+        model.beginLinkingPages(changing: span.id)
+        let change = try #require(model.linkingPages)
+        #expect(change.pages == "42–45")
+        #expect(change.itemID == item.id)
+        model.finishLinkingPages(change, item: item, pages: 50...50)
+        #expect(project.manifest.spans.count == 1)
+        #expect(project.manifest.span(id: span.id)?.pageNumbers == [50, 50])
+        #expect(project.pendingSpanCommand == nil)
+    }
+
+    @Test("A range linked by hand stays put while reading on")
+    func linkedRangeStaysPut() async throws {
+        guard let path = Self.comicPath else {
+            withKnownIssue("Set PANELS_TEST_CBR to run.") { Issue.record("skipped") }
+            return
+        }
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+
+        model.addToLibrary(URL(fileURLWithPath: path))
+        #expect(await Self.wait { model.hasComic })
+        model.newProject(named: "Linked")
+        let project = try #require(model.project)
+
+        model.goTo(spread: 4)
+        model.linkSelectionToPagesOnScreen()
+        let linked = try #require(project.manifest.spans.first)
+        model.spanAtCursor = linked.id
+
+        model.goTo(spread: 9)
+        #expect(project.manifest.span(id: linked.id) == linked)
     }
 
     @Test("The range follows the reading while the block is being written")
@@ -649,6 +865,50 @@ struct ReaderProjectTests {
         #expect(textView.spanRuns().count == 1)
     }
 
+    @Test("Restyling the whole document at once keeps each paragraph's own span, or lack of one")
+    func stylingEverythingKeepsEachParagraphsOwnSpan() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: """
+        <span:k7m2pq> The eclipse begins.
+        Just an ordinary line, in no range at all.
+        """, in: scratch)
+
+        // Select-all, the way the toolbar's style menu can, rather than a
+        // cursor sitting in one paragraph the way the keyboard shortcuts do.
+        textView.setSelectedRange(NSRange(location: 0, length: (textView.string as NSString).length))
+        coordinator.apply(.heading(1))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+
+        let blocks = ScriptMarkdown.parse(project.script)
+        #expect(blocks.map(\.spanID) == ["k7m2pq", nil])
+        #expect(blocks.allSatisfy { $0.headingLevel == 1 })
+        #expect(textView.spanRuns().count == 1)
+    }
+
+    @Test("A plain edit inside a block forces the view to repaint, so its box and margin rule can't fall out of sync")
+    func typingForcesARepaint() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, _) = try editor(script: "<span:k7m2pq> The eclipse begins.", in: scratch)
+
+        // needsDisplay only really sticks once a view is in a window — off
+        // in space it just reports false regardless, which would make this
+        // check meaningless.
+        let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView = textView
+        textView.needsDisplay = false
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+        textView.insertText("\nA new line, widening the block.", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+
+        // The box (drawn from the live layout) and its margin rule (drawn
+        // beside it, in the left margin — outside any glyph AppKit's own
+        // invalidation would notice) are only guaranteed to agree if the
+        // whole view actually repaints after every edit.
+        #expect(textView.needsDisplay)
+    }
+
     @Test("Turning a line into a note survives the round trip, span and all")
     func notesInTheEditor() throws {
         let scratch = try Scratch()
@@ -689,6 +949,387 @@ struct ReaderProjectTests {
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
         #expect(ScriptMarkdown.parse(project.script).allSatisfy { !$0.isNote })
         #expect(project.notesInScriptOrder.isEmpty)
+    }
+
+    @Test("Voice mode strips notes, chips and page ranges from what's on screen, but not from the script")
+    func voiceModeStripsWorkingMarks() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: """
+        <span:k7m2pq> Goku's training begins in earnest.
+        <span:k7m2pq> Hold this panel a beat.
+        """, in: scratch)
+        let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|1", firstPageIndex: 11,
+                            pageNumbers: [12, 17], text: "Berserk, Vol. 1, pp. 12–17")
+        project.manifest.store(span)
+        let middle = (textView.string as NSString).range(of: "Hold this panel a beat.")
+        textView.setSelectedRange(NSRange(location: middle.location, length: 0))
+        coordinator.apply(.note)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        let citation = Citation(itemID: "b.cbz|1", pageIndex: 3, pageNumbers: [4], text: "shot")
+        project.manifest.citations.append(citation)
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        coordinator.insert(citation)
+
+        #expect(textView.spanRuns().count == 1)
+
+        coordinator.setMode(.voice)
+        #expect(textView.spanRuns().isEmpty)
+        #expect(!textView.string.contains("Hold this panel a beat."))
+        var sawChip = false
+        textView.textStorage?.enumerateAttribute(.attachment, in: NSRange(location: 0, length: textView.textStorage!.length), options: []) { value, _, _ in
+            if value is CitationAttachment { sawChip = true }
+        }
+        #expect(!sawChip)
+        #expect(textView.isEditable == false)
+
+        // The script on disk — the source of truth — is untouched.
+        let blocks = ScriptMarkdown.parse(project.script)
+        #expect(blocks.contains { $0.isNote })
+        #expect(blocks.map(\.spanID).contains("k7m2pq"))
+
+        coordinator.setMode(.writer)
+        #expect(textView.spanRuns().count == 1)
+        #expect(textView.string.contains("Hold this panel a beat."))
+        #expect(textView.isEditable == true)
+    }
+
+    @Test("Mode switching sets editability for all three modes")
+    func modeSwitchingSetsEditability() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, _) = try editor(script: "Some writing.", in: scratch)
+        #expect(textView.isEditable)
+
+        coordinator.setMode(.voice)
+        #expect(!textView.isEditable)
+
+        coordinator.setMode(.editor)
+        #expect(!textView.isEditable)
+
+        coordinator.setMode(.writer)
+        #expect(textView.isEditable)
+    }
+
+    @Test("Creating a beat in Editor mode marks the manifest and the script, and draws a block")
+    func createsABeat() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "Cold open begins here.", in: scratch)
+        coordinator.setMode(.editor)
+
+        coordinator.createBeat(title: "Cold Open", blockRange: 0...0)
+
+        #expect(project.manifest.beats.count == 1)
+        let beat = try #require(project.manifest.beats.first)
+        #expect(beat.title == "Cold Open")
+        #expect(!beat.isDone)
+        #expect(ScriptMarkdown.parse(project.script)[0].beatID == beat.id)
+        #expect(textView.beatRuns().map(\.id) == [beat.id])
+    }
+
+    @Test("Removing a beat clears the marker and forgets the manifest record")
+    func removesABeat() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "Cold open begins here.", in: scratch)
+        coordinator.setMode(.editor)
+        coordinator.createBeat(title: "Cold Open", blockRange: 0...0)
+        let beat = try #require(project.manifest.beats.first)
+
+        coordinator.removeBeat(id: beat.id)
+
+        #expect(project.manifest.beats.isEmpty)
+        #expect(ScriptMarkdown.beatIDs(in: project.script).isEmpty)
+        #expect(textView.beatRuns().isEmpty)
+    }
+
+    @Test("A beat covers only the paragraphs it was made on — never the rest of the script")
+    func beatDoesNotOverextend() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: """
+        Cold open.
+        The middle beat.
+        The ending, untouched.
+        """, in: scratch)
+        coordinator.setMode(.editor)
+
+        // Made on just the middle paragraph — with no other beat in the
+        // script, the old "runs to the next beat or the end" design would
+        // have swallowed the ending too.
+        coordinator.createBeat(title: "Middle", blockRange: 1...1)
+
+        let blocks = ScriptMarkdown.parse(project.script)
+        #expect(blocks[0].beatID == nil)
+        #expect(blocks[1].beatID != nil)
+        #expect(blocks[2].beatID == nil)
+
+        let run = try #require(textView.beatRuns().first)
+        #expect(textView.beatRuns().count == 1)
+        let coveredText = (textView.string as NSString).substring(with: run.range)
+        #expect(coveredText.trimmingCharacters(in: .newlines) == "The middle beat.")
+    }
+
+    @Test("Creating a beat over a multi-paragraph selection covers exactly that range")
+    func beatCoversASelection() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: """
+        First paragraph.
+        Second paragraph.
+        Third paragraph.
+        """, in: scratch)
+        coordinator.setMode(.editor)
+
+        coordinator.createBeat(title: "First Two", blockRange: 0...1)
+
+        let blocks = ScriptMarkdown.parse(project.script)
+        #expect(blocks[0].beatID == blocks[1].beatID)
+        #expect(blocks[0].beatID != nil)
+        #expect(blocks[2].beatID == nil)
+        #expect(textView.beatRuns().count == 1)
+    }
+
+    @Test("Right-clicking a blank line between paragraphs still offers New Beat Here")
+    func beatMenuWorksOnABlankLine() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, _) = try editor(script: """
+        First paragraph.
+
+        Third paragraph.
+        """, in: scratch)
+        coordinator.setMode(.editor)
+
+        // The blank line itself: `render(_:mode:)` never attaches anything
+        // there, since an empty block never satisfies `result.length >
+        // start` — this is exactly the gap that made the beat menu vanish
+        // on a script with blank-line paragraph spacing.
+        let blankLineLocation = (textView.string as NSString).range(of: "First paragraph.\n").length
+        #expect(coordinator.beatMenuItems(at: blankLineLocation).map(\.title) == ["New Beat Here"])
+
+        // The very last character, and one past it — both realistic
+        // right-click targets near the end of a script.
+        let lastCharacter = textView.string.utf16.count - 1
+        #expect(!coordinator.beatMenuItems(at: lastCharacter).isEmpty)
+        #expect(!coordinator.beatMenuItems(at: textView.string.utf16.count).isEmpty)
+    }
+
+    @Test("Removing a beat that spans several paragraphs clears every one of them")
+    func removingAMultiParagraphBeatClearsAll() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: """
+        First paragraph.
+        Second paragraph.
+        Third paragraph.
+        """, in: scratch)
+        coordinator.setMode(.editor)
+        coordinator.createBeat(title: "First Two", blockRange: 0...1)
+        let beat = try #require(project.manifest.beats.first)
+
+        coordinator.removeBeat(id: beat.id)
+
+        let blocks = ScriptMarkdown.parse(project.script)
+        #expect(blocks.allSatisfy { $0.beatID == nil })
+        #expect(textView.beatRuns().isEmpty)
+    }
+
+    @Test("Toggling a beat's checkbox only touches the manifest, not the script")
+    func toggleBeatDoneOnlyTouchesManifest() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, _, project) = try editor(script: "Cold open begins here.", in: scratch)
+        coordinator.setMode(.editor)
+        coordinator.createBeat(title: "Cold Open", blockRange: 0...0)
+        let beat = try #require(project.manifest.beats.first)
+        let scriptBefore = project.script
+
+        coordinator.toggleBeatDone(id: beat.id)
+        #expect(project.manifest.beat(id: beat.id)?.isDone == true)
+        #expect(project.script == scriptBefore)
+
+        coordinator.toggleBeatDone(id: beat.id)
+        #expect(project.manifest.beat(id: beat.id)?.isDone == false)
+    }
+
+    @Test("A done beat's text stays full strength — finishing one is never a reason to dim it")
+    func doneBeatTextDoesNotFade() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, _, project) = try editor(script: "Cold open begins here.", in: scratch)
+        coordinator.setMode(.editor)
+        coordinator.createBeat(title: "Cold Open", blockRange: 0...0)
+        let beat = try #require(project.manifest.beats.first)
+
+        let notDone = coordinator.render(project.script, mode: .editor)
+        let notDoneAlpha = try #require((notDone.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.alphaComponent)
+
+        coordinator.toggleBeatDone(id: beat.id)
+        let done = coordinator.render(project.script, mode: .editor)
+        let doneAlpha = try #require((done.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.alphaComponent)
+
+        #expect(doneAlpha == notDoneAlpha)
+    }
+
+    @Test("The first not-done beat is next up; finishing it advances which one is")
+    func nextUpBeatAdvancesAsEachIsFinished() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, _, project) = try editor(script: """
+        First.
+        Second.
+        Third.
+        """, in: scratch)
+        coordinator.setMode(.editor)
+        coordinator.createBeat(title: "One", blockRange: 0...0)
+        coordinator.createBeat(title: "Two", blockRange: 1...1)
+        coordinator.createBeat(title: "Three", blockRange: 2...2)
+        let beats = project.beatsInScriptOrder
+        #expect(beats.map(\.title) == ["One", "Two", "Three"])
+
+        #expect(coordinator.beatInfo(for: beats[0].id)?.isNextUp == true)
+        #expect(coordinator.beatInfo(for: beats[1].id)?.isNextUp == false)
+        #expect(coordinator.beatInfo(for: beats[2].id)?.isNextUp == false)
+
+        coordinator.toggleBeatDone(id: beats[0].id)
+        #expect(coordinator.beatInfo(for: beats[0].id)?.isNextUp == false)
+        #expect(coordinator.beatInfo(for: beats[1].id)?.isNextUp == true)
+        #expect(coordinator.beatInfo(for: beats[2].id)?.isNextUp == false)
+
+        coordinator.toggleBeatDone(id: beats[1].id)
+        #expect(coordinator.beatInfo(for: beats[1].id)?.isNextUp == false)
+        #expect(coordinator.beatInfo(for: beats[2].id)?.isNextUp == true)
+
+        coordinator.toggleBeatDone(id: beats[2].id)
+        #expect(coordinator.beatInfo(for: beats[2].id)?.isNextUp == false)
+    }
+
+    @Test("A beat marker is invisible to Writer mode, and survives an edit there")
+    func beatSurvivesWriterModeEdit() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "Cold open begins here.", in: scratch)
+        coordinator.setMode(.editor)
+        coordinator.createBeat(title: "Cold Open", blockRange: 0...0)
+        let beat = try #require(project.manifest.beats.first)
+
+        coordinator.setMode(.writer)
+        // Nothing about the beat shows up in Writer mode — `beatRuns()` is
+        // empty even though the `beatKey` attribute is still there, because
+        // `showsBeatBlocks` gates it off outside Editor mode.
+        #expect(textView.string == "Cold open begins here.")
+        #expect(textView.beatRuns().isEmpty)
+        var sawBeatKeyInWriterMode = false
+        textView.textStorage?.enumerateAttribute(ScriptStyle.beatKey, in: NSRange(location: 0, length: textView.textStorage!.length), options: []) { value, _, _ in
+            if value != nil { sawBeatKeyInWriterMode = true }
+        }
+        #expect(sawBeatKeyInWriterMode)
+
+        // ...but typing anywhere still round-trips the marker rather than
+        // silently dropping it on the next save.
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        textView.insertText(" Still going.", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+
+        #expect(ScriptMarkdown.beatIDs(in: project.script) == [beat.id])
+        #expect(project.script.contains("Still going."))
+    }
+
+    @Test("Voice mode strips a beat's block and attribute, the same way it strips notes and chips")
+    func voiceModeStripsBeats() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, _) = try editor(script: "Cold open begins here.", in: scratch)
+        coordinator.setMode(.editor)
+        coordinator.createBeat(title: "Cold Open", blockRange: 0...0)
+
+        coordinator.setMode(.voice)
+
+        #expect(textView.string == "Cold open begins here.")
+        #expect(textView.beatRuns().isEmpty)
+        var sawBeatKey = false
+        textView.textStorage?.enumerateAttribute(ScriptStyle.beatKey, in: NSRange(location: 0, length: textView.textStorage!.length), options: []) { value, _, _ in
+            if value != nil { sawBeatKey = true }
+        }
+        #expect(!sawBeatKey)
+    }
+
+    @Test("Beats come back in script order, and orphans are cleaned up like unused spans")
+    func beatsInScriptOrderAndGC() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, _, project) = try editor(script: "First.\nSecond.", in: scratch)
+        coordinator.setMode(.editor)
+        coordinator.createBeat(title: "First Beat", blockRange: 0...0)
+        coordinator.createBeat(title: "Second Beat", blockRange: 1...1)
+
+        #expect(project.beatsInScriptOrder.map(\.title) == ["First Beat", "Second Beat"])
+
+        // The marker lines are removed directly, without going through
+        // "Remove Beat".
+        project.script = "First, no longer marked.\nSecond, no longer marked."
+        #expect(Set(project.unusedBeats.map(\.title)) == Set(["First Beat", "Second Beat"]))
+        project.cleanUpUnusedCaptures()
+        #expect(project.manifest.beats.isEmpty)
+    }
+
+    @Test("Bold, italic, highlight and text color apply to a selection, compose, and round-trip; alignment is per-paragraph")
+    func inlineFormattingAndAlignment() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "Guts raises his sword.", in: scratch)
+
+        let word = (textView.string as NSString).range(of: "raises")
+        textView.setSelectedRange(word)
+        coordinator.applyInline(.toggleBold)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script) == [.paragraph([
+            .text("Guts "),
+            .styledText(TextRun(text: "raises", bold: true)),
+            .text(" his sword."),
+        ])])
+
+        // Toggling the same selection again turns it back off, cleanly.
+        textView.setSelectedRange(word)
+        coordinator.applyInline(.toggleBold)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script) == [.paragraph([.text("Guts raises his sword.")])])
+
+        // A highlight and a text color on a different word, together.
+        let sword = (textView.string as NSString).range(of: "sword")
+        textView.setSelectedRange(sword)
+        coordinator.applyInline(.setHighlight(.yellow))
+        coordinator.applyInline(.setTextColor(.blue))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script) == [.paragraph([
+            .text("Guts raises his "),
+            .styledText(TextRun(text: "sword", highlight: .yellow, textColor: .blue)),
+            .text("."),
+        ])])
+
+        // Clearing the highlight leaves the text color alone.
+        textView.setSelectedRange(sword)
+        coordinator.applyInline(.setHighlight(nil))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script) == [.paragraph([
+            .text("Guts raises his "),
+            .styledText(TextRun(text: "sword", textColor: .blue)),
+            .text("."),
+        ])])
+
+        // Alignment is whole-paragraph and independent of the inline styling.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        coordinator.apply(.alignment(.center))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        let aligned = ScriptMarkdown.parse(project.script)
+        #expect(aligned.map(\.alignment) == [.center])
+        #expect(aligned == [.paragraph([
+            .text("Guts raises his "),
+            .styledText(TextRun(text: "sword", textColor: .blue)),
+            .text("."),
+        ], alignment: .center)])
     }
 
     @Test("A note ends on an empty line, or on the same key that started it")

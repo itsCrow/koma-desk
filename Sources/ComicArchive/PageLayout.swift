@@ -73,6 +73,11 @@ public func buildSpreads(pageCount: Int, isWide: [Bool]) -> [Spread] {
     return spreads
 }
 
+/// One page per spread, never paired — for the reader's single-page layout.
+public func buildSinglePageSpreads(pageCount: Int) -> [Spread] {
+    (0..<pageCount).map { Spread(pageIndices: [$0]) }
+}
+
 // MARK: - Reading direction
 
 /// Which way the comic reads.

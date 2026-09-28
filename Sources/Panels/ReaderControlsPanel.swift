@@ -257,7 +257,7 @@ struct ReaderControlsPanel: View {
                     .overlay {
                         if isCurrent {
                             RoundedRectangle(cornerRadius: 5)
-                                .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                                .strokeBorder(Palette.accent, lineWidth: 2.5)
                         }
                     }
                 Text("\(page + 1)")
@@ -266,7 +266,7 @@ struct ReaderControlsPanel: View {
                     .frame(minWidth: 20)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(isCurrent ? Color.accentColor : .clear, in: Capsule())
+                    .background(isCurrent ? Palette.accent : .clear, in: Capsule())
             }
         }
         .buttonStyle(.plain)
@@ -410,21 +410,6 @@ private struct PageThumbnail: View {
         .shadow(color: .black.opacity(0.4), radius: 8, y: 4)
         .task(id: url) {
             image = await ThumbnailCache.shared.thumbnail(for: url)
-        }
-    }
-}
-
-// MARK: - Glass
-
-extension View {
-    /// Liquid Glass where the system has it, the nearest material where it
-    /// doesn't. Deployment target is macOS 14; the effect arrived in 26.
-    @ViewBuilder
-    func glassPanel(cornerRadius: CGFloat) -> some View {
-        if #available(macOS 26.0, *) {
-            self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
-        } else {
-            self.background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
         }
     }
 }
