@@ -67,6 +67,38 @@ public enum FountainLite {
         return nil
     }
 
+    /// What a line typed in the editor is asking to become, the moment its
+    /// marks are complete — the editor's convert-as-you-type, from the same
+    /// rules the file uses. `= ` and `# `…`### ` count as soon as the space
+    /// after them is typed, before any words (the words are what comes
+    /// next); `[[note]]` counts when its closing `]]` is. Only at the very
+    /// start of the line: `=` or `#` further along is just a character.
+    public enum Typed: Equatable, Sendable {
+        case synopsis
+        case heading(level: Int)
+        case note
+    }
+
+    /// The typed line's kind, and how many characters of marks to take off
+    /// its start and its end once it becomes that kind.
+    public static func typedLine(_ line: Substring) -> (kind: Typed, leading: Int, trailing: Int)? {
+        if line.hasPrefix(synopsisMarkerTyped), !line.hasPrefix("==") {
+            return (.synopsis, synopsisMarkerTyped.count, 0)
+        }
+        for level in 1...3 where line.hasPrefix(String(repeating: "#", count: level) + " ") {
+            return (.heading(level: level), level + 1, 0)
+        }
+        // Exactly `[[…]]`, as typed — no surrounding spaces to account for.
+        if line.hasPrefix("[["), line.hasSuffix("]]"), line.count > 4,
+           let text = wholeLineNote(line), !text.isEmpty,
+           !line.dropFirst(2).dropLast(2).hasPrefix(" "), !line.dropFirst(2).dropLast(2).hasSuffix(" ") {
+            return (.note, 2, 2)
+        }
+        return nil
+    }
+
+    private static let synopsisMarkerTyped = "= "
+
     /// Plain text from somewhere else — an outline drafted in Notes, a
     /// Fountain file's structure — as script blocks: `#` headings, `=`
     /// synopses, `[[notes]]` and `> ` notes become what they say, and every

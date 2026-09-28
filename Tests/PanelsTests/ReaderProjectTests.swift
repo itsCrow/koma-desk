@@ -926,6 +926,116 @@ struct ReaderProjectTests {
         #expect(sections.flatMap { $0.shots.map(\.citation.id) } == project.citationsInScriptOrder.map(\.id))
     }
 
+    /// Types the way a keyboard does: one character at a time at the cursor,
+    /// each landing as its own edit.
+    private func type(_ text: String, into textView: ScriptTextView, _ coordinator: ScriptEditorView.Coordinator) {
+        for character in text {
+            textView.insertText(String(character), replacementRange: textView.selectedRange())
+            coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        }
+    }
+
+    @Test("Typing = and a space at the start of a line makes it a synopsis")
+    func typesASynopsis() async throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "", in: scratch)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        type("= ", into: textView, coordinator)
+        #expect(await Self.wait(seconds: 2) { textView.string.isEmpty })
+        // The marks are gone; the style says it. Keep typing into it.
+        type("Why the brand matters", into: textView, coordinator)
+        #expect(project.script == "= Why the brand matters")
+        #expect(ScriptMarkdown.parse(project.script) == [.synopsis([.text("Why the brand matters")])])
+        // Voice still hides it: a synopsis is never read aloud.
+        #expect(!coordinator.render(project.script, mode: .voice).string.contains("brand"))
+
+        // Return lets go of it: the next line is narration.
+        type("\nThe brand bleeds.", into: textView, coordinator)
+        #expect(ScriptMarkdown.parse(project.script) == [
+            .synopsis([.text("Why the brand matters")]), .paragraph([.text("The brand bleeds.")]),
+        ])
+    }
+
+    @Test("Adding = and a space in front of words already written makes the line a synopsis")
+    func promotesAnExistingLine() async throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "Guts before the Eclipse", in: scratch)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        type("= ", into: textView, coordinator)
+        #expect(await Self.wait(seconds: 2) { project.script == "= Guts before the Eclipse" })
+        #expect(textView.string == "Guts before the Eclipse")
+        // The cursor stays at the start of the words, where it was typing.
+        #expect(textView.selectedRange().location == 0)
+    }
+
+    @Test("= anywhere but the start of a line is just a character")
+    func leavesMidLineEqualsAlone() async throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "Two plus two", in: scratch)
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        type(" = four", into: textView, coordinator)
+        // No space after it, at the start: not the synopsis mark either.
+        type("\n=5 apples", into: textView, coordinator)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(ScriptMarkdown.parse(project.script) == [
+            .paragraph([.text("Two plus two = four")]), .paragraph([.text("=5 apples")]),
+        ])
+        // Saved escaped, so the file never reads it as a synopsis either.
+        #expect(project.script == "Two plus two = four\n\\=5 apples")
+    }
+
+    @Test("Backspace at the start of a synopsis makes it narration again, words intact")
+    func backspaceLetsGoOfASynopsis() async throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "= Why the brand matters", in: scratch)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
+        #expect(project.script == "Why the brand matters")
+        #expect(textView.string == "Why the brand matters")
+    }
+
+    @Test("The same typing path: # and a space makes a heading, a whole [[line]] a note")
+    func typesHeadingsAndNotes() async throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "", in: scratch)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        type("## ", into: textView, coordinator)
+        #expect(await Self.wait(seconds: 2) { textView.string.isEmpty })
+        type("The Eclipse\n[[hold on this panel]]", into: textView, coordinator)
+        #expect(await Self.wait(seconds: 2) { ScriptMarkdown.parse(project.script).last?.kind == .note })
+        #expect(project.script == "## The Eclipse\n> hold on this panel")
+        // Brackets mid-line aren't a note.
+        type(" and more", into: textView, coordinator)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(project.script == "## The Eclipse\n> hold on this panel and more")
+    }
+
+    @Test("Typing a synopsis leaves the rest of script.md, cites and all, byte for byte")
+    func typingKeepsTheRestOfTheFile() async throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let script = """
+        # Act One
+        <span:k7m2pq> The brand is already bleeding [p. 12](panels://cite/c1abcd).
+        > Hold on this panel
+        """
+        let (coordinator, textView, project) = try editor(script: script, in: scratch)
+        // A new line straight after the heading, then the synopsis on it.
+        let afterHeading = (textView.string as NSString).range(of: "Act One").upperBound
+        textView.setSelectedRange(NSRange(location: afterHeading, length: 0))
+        type("\n= Why it matters", into: textView, coordinator)
+        #expect(await Self.wait(seconds: 2) {
+            project.script == script.replacingOccurrences(of: "# Act One\n", with: "# Act One\n= Why it matters\n")
+        })
+        #expect(ScriptMarkdown.citationIDs(in: project.script) == ["c1abcd"])
+        #expect(ScriptMarkdown.outline(in: project.script).first?.synopsis == "Why it matters")
+    }
+
     @Test("Styling a line in a script with nothing in it yet doesn't crash")
     func stylesAnEmptyScript() throws {
         let scratch = try Scratch()

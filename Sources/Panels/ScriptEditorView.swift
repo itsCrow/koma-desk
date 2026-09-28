@@ -357,6 +357,7 @@ struct ScriptEditorView: NSViewRepresentable {
             normalizeSpans()
             normalizeBeats()
             project.script = serialise()
+            runTypingFollowUps()
             // A span's box and its margin rule are entirely custom-painted,
             // computed together from the live layout — but AppKit invalidates
             // display by glyph, and the rule sits in the left margin, outside
@@ -1062,9 +1063,22 @@ struct ScriptEditorView: NSViewRepresentable {
         }
 
         /// Return on an empty note ends it rather than making another one —
-        /// the way a list or a blockquote lets go in every editor.
+        /// the way a list or a blockquote lets go in every editor. Return in a
+        /// heading or a synopsis always lets go: each is one line, a label,
+        /// and what's written under it is narration — including a `= ` typed
+        /// straight under a heading, which only converts on a plain line. And a
+        /// keystroke at the start of a plain line, or a closing `]`, has the
+        /// line checked for Fountain-lite marks — see `convertTypedLine(at:)`.
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
                       replacementString: String?) -> Bool {
+            if let replacement = replacementString, replacement != "\n", !replacement.isEmpty {
+                noteTypedLine(for: affectedCharRange, replacement: replacement)
+            }
+            if replacementString == "\n",
+               [.synopsis, .heading1, .heading2, .heading3].contains(paragraphStyle(at: affectedCharRange.location)) {
+                endsLabelLine = true
+                return true
+            }
             guard replacementString == "\n", currentStyle() == .note,
                   let storage = textView.textStorage
             else { return true }
@@ -1103,6 +1117,106 @@ struct ScriptEditorView: NSViewRepresentable {
 
         private func labelText(_ label: ReferenceLabel, isCurrent: Bool) -> String {
             isCurrent ? (label.pages.isEmpty ? label.full : label.pages) : label.short
+        }
+
+        // MARK: Convert as you type
+
+        /// A paragraph to check once the keystroke that touched it has
+        /// landed, by the location of its start.
+        private var typedLineToCheck: Int?
+        /// Return was just pressed in a heading or a synopsis: the new line
+        /// is narration.
+        private var endsLabelLine = false
+
+        /// Marks the paragraph for a check when the keystroke could complete
+        /// a line's marks: within its first few characters (`=`, `#`, and
+        /// the space after them), or a `]` (the end of `[[note]]`). Only a
+        /// plain paragraph — one already a synopsis, heading or note is what
+        /// it's going to be.
+        private func noteTypedLine(for range: NSRange, replacement: String) {
+            guard mode == .writer, let storage = textView?.textStorage else { return }
+            let paragraph = (storage.string as NSString).paragraphRange(for: NSRange(location: range.location, length: 0))
+            guard paragraphStyle(at: range.location) == .body else { return }
+            if range.location - paragraph.location <= 3 || replacement.hasSuffix("]") {
+                typedLineToCheck = paragraph.location
+            }
+        }
+
+        /// The paragraph style of the paragraph holding `location`: from its
+        /// own text when it has any, the typing attributes when it's empty.
+        private func paragraphStyle(at location: Int) -> ScriptStyle.Paragraph {
+            guard let storage = textView?.textStorage else { return .body }
+            let string = storage.string as NSString
+            let paragraph = string.paragraphRange(for: NSRange(location: min(location, string.length), length: 0))
+            let hasText = paragraph.length > 0 && string.character(at: paragraph.location) != 0x0A
+            guard hasText else { return currentStyle() }
+            let raw = storage.attribute(ScriptStyle.paragraphKey, at: paragraph.location, effectiveRange: nil) as? String
+            return ScriptStyle.Paragraph(rawValue: raw ?? "") ?? .body
+        }
+
+        /// Called after every edit: the follow-ups a keystroke asked for. The
+        /// conversion waits for the next turn of the run loop so it's its own
+        /// undo step — ⌘Z brings back the `= ` exactly as typed.
+        private func runTypingFollowUps() {
+            if endsLabelLine {
+                endsLabelLine = false
+                if let textView {
+                    var attributes = ScriptStyle.attributes(for: .body)
+                    if let span = textView.typingAttributes[ScriptStyle.spanKey] { attributes[ScriptStyle.spanKey] = span }
+                    textView.typingAttributes = attributes
+                    publishSelectionFormatting()
+                }
+            }
+            if let location = typedLineToCheck {
+                typedLineToCheck = nil
+                DispatchQueue.main.async { [weak self] in self?.convertTypedLine(at: location) }
+            }
+        }
+
+        /// Turns the plain paragraph at `location` into what its marks say —
+        /// `= ` a synopsis, `# ` a heading, `[[…]]` a note — by taking the
+        /// marks off and applying the same style Format ▸ Synopsis (or
+        /// Heading, or Note) does. The rule itself is `FountainLite.typedLine`,
+        /// the file format's own.
+        func convertTypedLine(at location: Int) {
+            guard mode == .writer, let textView, let storage = textView.textStorage,
+                  location <= storage.length, paragraphStyle(at: location) == .body else { return }
+            let string = storage.string as NSString
+            let paragraph = string.paragraphRange(for: NSRange(location: location, length: 0))
+            var content = paragraph
+            if content.length > 0, string.character(at: content.location + content.length - 1) == 0x0A { content.length -= 1 }
+            guard let typed = FountainLite.typedLine(Substring(string.substring(with: content))) else { return }
+
+            let cursor = textView.selectedRange()
+            let trailing = NSRange(location: content.location + content.length - typed.trailing, length: typed.trailing)
+            let leading = NSRange(location: content.location, length: typed.leading)
+            for marks in [trailing, leading] where marks.length > 0 {
+                guard textView.shouldChangeText(in: marks, replacementString: "") else { return }
+                storage.replaceCharacters(in: marks, with: "")
+                textView.didChangeText()
+            }
+            // The cursor stays with the words it was among.
+            let removedBefore = cursor.location >= content.location + content.length ? typed.leading + typed.trailing
+                : max(0, min(cursor.location - content.location, typed.leading))
+            textView.setSelectedRange(NSRange(location: max(content.location, cursor.location - removedBefore), length: 0))
+            switch typed.kind {
+            case .synopsis: apply(.synopsis)
+            case .heading(let level): apply(.heading(level))
+            case .note: apply(.note)
+            }
+        }
+
+        /// Backspace at the very start of a synopsis lets go of it: the line
+        /// is narration again, words intact. The same way out a list item
+        /// gives in any editor — nobody is trapped in a style they typed.
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.deleteBackward(_:)), mode == .writer else { return false }
+            let selection = textView.selectedRange()
+            guard selection.length == 0 else { return false }
+            let paragraph = (textView.string as NSString).paragraphRange(for: selection)
+            guard selection.location == paragraph.location, paragraphStyle(at: selection.location) == .synopsis else { return false }
+            apply(.body)
+            return true
         }
 
         private func currentStyle() -> ScriptStyle.Paragraph {

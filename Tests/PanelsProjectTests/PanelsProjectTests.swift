@@ -927,6 +927,23 @@ struct FountainLiteTests {
         #expect(opening.first?.citationIDs == ["c0zzzz"])
     }
 
+    @Test("What a typed line asks to become, the moment its marks are complete")
+    func typedLines() {
+        // The synopsis mark counts at its space, before any words.
+        #expect(FountainLite.typedLine("= ")! == (.synopsis, 2, 0))
+        #expect(FountainLite.typedLine("= Why it matters")! == (.synopsis, 2, 0))
+        #expect(FountainLite.typedLine("=")  == nil)
+        #expect(FountainLite.typedLine("=5 apples") == nil)
+        #expect(FountainLite.typedLine("== ") == nil)
+        #expect(FountainLite.typedLine("Two = four") == nil)
+        #expect(FountainLite.typedLine("## ")! == (.heading(level: 2), 3, 0))
+        #expect(FountainLite.typedLine("#hashtag") == nil)
+        #expect(FountainLite.typedLine("[[hold]]")! == (.note, 2, 2))
+        #expect(FountainLite.typedLine("[[hold") == nil)
+        #expect(FountainLite.typedLine("say [[hold]]") == nil)
+        #expect(FountainLite.typedLine("[[]]") == nil)
+    }
+
     @Test("A shot belongs to the section it first appears in")
     func firstAppearances() {
         let sections = ScriptMarkdown.outline(in: Self.sample)
