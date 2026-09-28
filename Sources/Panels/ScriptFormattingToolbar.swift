@@ -56,6 +56,8 @@ struct ScriptFormattingToolbar: View {
             Button("Subheading") { model.format(.heading(3)) }
             Button("Heading") { model.format(.heading(2)) }
             Button("Title") { model.format(.heading(1)) }
+            Divider()
+            Button("Synopsis") { model.format(.synopsis) }
         } label: {
             HStack(spacing: 4) {
                 Text(styleName)
@@ -75,6 +77,7 @@ struct ScriptFormattingToolbar: View {
         case .heading2: "Heading"
         case .heading1: "Title"
         case .note: "Note"
+        case .synopsis: "Synopsis"
         }
     }
 

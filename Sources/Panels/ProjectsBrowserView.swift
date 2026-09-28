@@ -803,6 +803,8 @@ private struct PreviewLineText: View {
             line = line.bold().foregroundColor(Palette.textPrimary)
         case .note:
             line = line.italic().foregroundColor(Palette.noteColor)
+        case .synopsis:
+            line = line.foregroundColor(Palette.textTertiary)
         case .paragraph:
             line = line.foregroundColor(Palette.textSecondary)
         }

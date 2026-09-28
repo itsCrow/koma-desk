@@ -50,6 +50,10 @@ public struct ScriptBlock: Equatable, Sendable {
         /// An aside for the editor — "hold this panel a beat". Part of the
         /// script file, but never part of what gets read aloud.
         case note
+        /// Fountain's `= synopsis`: a short label for the section it sits
+        /// in — what this stretch is about. Outline, not narration: never
+        /// read aloud. See `FountainLite`.
+        case synopsis
     }
 
     public var kind: Kind
@@ -90,12 +94,29 @@ public struct ScriptBlock: Equatable, Sendable {
         ScriptBlock(kind: .note, span: span, beat: beat, alignment: alignment, inlines: inlines)
     }
 
+    public static func synopsis(_ inlines: [ScriptInline], span: String? = nil, beat: String? = nil,
+                                 alignment: ScriptAlignment = .leading) -> ScriptBlock {
+        ScriptBlock(kind: .synopsis, span: span, beat: beat, alignment: alignment, inlines: inlines)
+    }
+
     public var headingLevel: Int? {
         if case .heading(let level) = kind { return level }
         return nil
     }
 
     public var isNote: Bool { kind == .note }
+    public var isSynopsis: Bool { kind == .synopsis }
+
+    /// The line's words, chips as their text — for labels and outlines.
+    public var plainText: String {
+        inlines.map { run -> String in
+            switch run {
+            case .text(let s): return s
+            case .styledText(let styled): return styled.text
+            case .citation(_, let text): return text
+            }
+        }.joined()
+    }
 }
 
 /// The script's file format: Markdown, one block per line, citations as links
@@ -149,6 +170,16 @@ public enum ScriptMarkdown {
         if body.hasPrefix(noteMarker) {
             return .note(parseInlines(String(body.dropFirst(noteMarker.count))), span: span, beat: beat, alignment: alignment)
         }
+        // Fountain-lite: `= synopsis`, and a `[[note]]` line — the same note
+        // as `> `, written the Fountain way.
+        switch FountainLite.classify(Substring(body)) {
+        case .synopsis(let text)?:
+            return .synopsis(parseInlines(text), span: span, beat: beat, alignment: alignment)
+        case .note(let text)?:
+            return .note(parseInlines(text), span: span, beat: beat, alignment: alignment)
+        case nil:
+            break
+        }
         var level = 0
         var rest = Substring(body)
         while rest.first == "#", level < 3 { level += 1; rest = rest.dropFirst() }
@@ -162,6 +193,7 @@ public enum ScriptMarkdown {
     static let beatOpening = "<beat:"
     static let alignOpening = "<align:"
     static let noteMarker = "> "
+    static let synopsisMarker = "= "
 
     /// `<span:k7m2pq> ` at the very start of a line, and what follows it.
     /// Anything that isn't exactly this shape is ordinary prose.
@@ -346,12 +378,15 @@ public enum ScriptMarkdown {
             return prefix + String(repeating: "#", count: max(1, min(level, 3))) + " " + serializeInlines(block.inlines)
         case .note:
             return prefix + noteMarker + serializeInlines(block.inlines)
+        case .synopsis:
+            return prefix + synopsisMarker + serializeInlines(block.inlines)
         case .paragraph:
             var body = serializeInlines(block.inlines)
             // A paragraph that happens to start like a heading, a note, a
-            // span marker, a beat marker or an alignment marker is escaped so
-            // it comes back as the paragraph it is.
-            if body.hasPrefix("#") || body.hasPrefix(noteMarker)
+            // synopsis, a span marker, a beat marker or an alignment marker is
+            // escaped so it comes back as the paragraph it is. (A `[[` can't
+            // start one: every `[` in prose is escaped already.)
+            if body.hasPrefix("#") || body.hasPrefix(noteMarker) || FountainLite.synopsisText(Substring(body)) != nil
                 || parseSpanMarker(body) != nil || parseBeatMarker(body) != nil || parseAlignMarker(body) != nil {
                 body = "\\" + body
             }
@@ -479,6 +514,9 @@ public enum ScriptMarkdown {
         // line of its run, and dropping that line later would take the label
         // with it.
         let blocks = blocks.compactMap { block -> ScriptBlock? in
+            // A synopsis labels the outline; it's never narration, whatever
+            // is done with the notes.
+            if block.isSynopsis { return nil }
             guard block.isNote else { return block }
             switch notes {
             case .omit:
@@ -508,5 +546,57 @@ public enum ScriptMarkdown {
             }
             return line
         }.joined(separator: "\n")
+    }
+
+    // MARK: - Outline
+
+    /// The script's sections, in order: one per heading, each with the
+    /// first synopsis written under it and the citations it holds. Anything
+    /// before the first heading is a section with no title — present only
+    /// if it holds a synopsis or a citation.
+    public static func outline(_ blocks: [ScriptBlock]) -> [ScriptSection] {
+        var sections: [ScriptSection] = [ScriptSection(title: nil, level: 0, synopsis: nil, citationIDs: [])]
+        for block in blocks {
+            if let level = block.headingLevel {
+                sections.append(ScriptSection(title: block.plainText, level: level, synopsis: nil, citationIDs: []))
+                continue
+            }
+            let last = sections.count - 1
+            if block.isSynopsis, sections[last].synopsis == nil {
+                sections[last].synopsis = block.plainText
+            }
+            for run in block.inlines {
+                if case .citation(let id, _) = run, !sections[last].citationIDs.contains(id) {
+                    sections[last].citationIDs.append(id)
+                }
+            }
+        }
+        if sections[0].synopsis == nil, sections[0].citationIDs.isEmpty { sections.removeFirst() }
+        return sections
+    }
+
+    public static func outline(in markdown: String) -> [ScriptSection] {
+        outline(parse(markdown))
+    }
+}
+
+/// One section of a script's outline: a heading, what it's about, and the
+/// shots in it. See `ScriptMarkdown.outline(_:)`.
+public struct ScriptSection: Equatable, Sendable {
+    /// The heading's text; nil for whatever comes before the first heading.
+    public var title: String?
+    /// 1–3 for `#`–`###`; 0 for the untitled opening.
+    public var level: Int
+    /// The first `= synopsis` under the heading.
+    public var synopsis: String?
+    /// Citations in the section, in order, each once. One cited again in a
+    /// later section is listed there too.
+    public var citationIDs: [String]
+
+    public init(title: String?, level: Int, synopsis: String?, citationIDs: [String]) {
+        self.title = title
+        self.level = level
+        self.synopsis = synopsis
+        self.citationIDs = citationIDs
     }
 }

@@ -826,3 +826,120 @@ struct LinkingPagesTests {
         #expect(ScriptMarkdown.spanIDs(in: text) == ["k7m2pq", "q3wz8n"])
     }
 }
+
+@Suite("Fountain-lite")
+struct FountainLiteTests {
+    /// A video-essay script the way a writer would draft it: acts as
+    /// sections, a synopsis under each, a Fountain note and a Markdown note,
+    /// shouted lettering quoted in capitals, and panel citations throughout.
+    static let sample = """
+    # Act One: The Brand
+    = Guts before the Eclipse — why the brand matters.
+    <span:k7m2pq> The first time we see the brand, it's already bleeding [p. 12](panels://cite/c1abcd).
+    [[Hold on this panel for two beats]]
+    He screams: I WON'T DIE HERE.
+    ## The Eclipse
+    = Griffith's choice, told through three panels.
+    > Zoom in slowly.
+    It happens across a single spread [pp. 40–41](panels://cite/c2efgh), and then [again](panels://cite/c1abcd).
+    ===
+    INT. TAVERN - NIGHT
+    """
+
+    @Test("A sample VO script parses into sections, synopses, notes and narration")
+    func parsesSample() {
+        let blocks = ScriptMarkdown.parse(Self.sample)
+        #expect(blocks.map(\.kind) == [
+            .heading(level: 1), .synopsis, .paragraph, .note, .paragraph,
+            .heading(level: 2), .synopsis, .note, .paragraph, .paragraph, .paragraph,
+        ])
+        #expect(blocks[1].plainText == "Guts before the Eclipse — why the brand matters.")
+        // The Fountain note is the same note the script already had.
+        #expect(blocks[3] == .note([.text("Hold on this panel for two beats")]))
+        // Screenplay grammar stays narration: capitals, a page break, a scene heading.
+        #expect(blocks[4].plainText == "He screams: I WON'T DIE HERE.")
+        #expect(blocks[9].plainText == "===")
+        #expect(blocks[10].plainText == "INT. TAVERN - NIGHT")
+        // The span marker still belongs to its line.
+        #expect(blocks[2].spanID == "k7m2pq")
+    }
+
+    @Test("Citations survive: every cite parses, in order, and points at the same id")
+    func preservesCites() {
+        let blocks = ScriptMarkdown.parse(Self.sample)
+        #expect(ScriptMarkdown.citationIDs(in: Self.sample) == ["c1abcd", "c2efgh"])
+        #expect(blocks[2].inlines.contains(.citation(id: "c1abcd", text: "p. 12")))
+        let reparsed = ScriptMarkdown.parse(ScriptMarkdown.serialize(blocks))
+        #expect(ScriptMarkdown.citationIDs(in: ScriptMarkdown.serialize(reparsed)) == ["c1abcd", "c2efgh"])
+        // The shot list's sentence around a shot still reads, chips removed.
+        #expect(ScriptMarkdown.context(of: "c2efgh", in: Self.sample) == "It happens across a single spread , and then .")
+    }
+
+    @Test("script.md round-trips: the app's own form exactly, and a [[note]] without losing a word")
+    func roundTrips() {
+        let blocks = ScriptMarkdown.parse(Self.sample)
+        let saved = ScriptMarkdown.serialize(blocks)
+        // The one rewrite: a [[note]] line is saved as the script's `> ` note.
+        #expect(saved == Self.sample.replacingOccurrences(of: "[[Hold on this panel for two beats]]",
+                                                          with: "> Hold on this panel for two beats"))
+        // From then on it's stable, byte for byte.
+        #expect(ScriptMarkdown.serialize(ScriptMarkdown.parse(saved)) == saved)
+        #expect(ScriptMarkdown.parse(saved) == blocks)
+    }
+
+    @Test("Prose that begins like a synopsis stays prose")
+    func escapesEquals() {
+        let blocks: [ScriptBlock] = [.paragraph([.text("= is how Fountain marks a synopsis")]), .paragraph([.text("=5")])]
+        let text = ScriptMarkdown.serialize(blocks)
+        #expect(text == "\\= is how Fountain marks a synopsis\n\\=5")
+        #expect(ScriptMarkdown.parse(text) == blocks)
+    }
+
+    @Test("Synopsis forms: with or without the space, never a page break or a lone =")
+    func synopsisForms() {
+        #expect(ScriptMarkdown.parse("=Tight") == [.synopsis([.text("Tight")])])
+        #expect(ScriptMarkdown.parse("= Spaced") == [.synopsis([.text("Spaced")])])
+        #expect(ScriptMarkdown.parse("==").first?.kind == .paragraph)
+        #expect(ScriptMarkdown.parse("=").first?.kind == .paragraph)
+        // Only a line that's entirely a note is one.
+        #expect(ScriptMarkdown.parse("Say it [[softly]] here").first?.kind == .paragraph)
+        #expect(ScriptMarkdown.parse("[[a]] and [[b]]").first?.kind == .paragraph)
+    }
+
+    @Test("A synopsis is never read aloud, whatever happens to the notes")
+    func plainTextLeavesOutSynopses() {
+        let blocks = ScriptMarkdown.parse("# Act\n= What it's about\nNarration.\n> Aside")
+        #expect(ScriptMarkdown.plainText(blocks) == "Act\nNarration.")
+        #expect(ScriptMarkdown.plainText(blocks, notes: .marked) == "Act\nNarration.\n[NOTE: Aside]")
+    }
+
+    @Test("The outline: one section per heading, with its synopsis and the shots in it")
+    func outline() {
+        let sections = ScriptMarkdown.outline(in: Self.sample)
+        #expect(sections.map(\.title) == ["Act One: The Brand", "The Eclipse"])
+        #expect(sections.map(\.level) == [1, 2])
+        #expect(sections.map(\.synopsis) == ["Guts before the Eclipse — why the brand matters.",
+                                             "Griffith's choice, told through three panels."])
+        #expect(sections.map(\.citationIDs) == [["c1abcd"], ["c2efgh", "c1abcd"]])
+        // Shots before any heading get an untitled section of their own.
+        let opening = ScriptMarkdown.outline(in: "Cold open [p. 1](panels://cite/c0zzzz).\n# Act One")
+        #expect(opening.map(\.title) == [nil, "Act One"])
+        #expect(opening.first?.citationIDs == ["c0zzzz"])
+    }
+
+    @Test("Plain text pasted in keeps every character, and gains structure only from structural lines")
+    func fromPlainText() {
+        let text = "# Act One\n= The setup\n[[check this]]\n> and this\nFive * three [is] {not} markup.\n\nINT. HOUSE"
+        #expect(FountainLite.hasStructure(text))
+        #expect(!FountainLite.hasStructure("Just words.\nMore words."))
+        let blocks = FountainLite.blocks(fromPlainText: text)
+        #expect(blocks == [
+            .heading(level: 1, [.text("Act One")]), .synopsis([.text("The setup")]),
+            .note([.text("check this")]), .note([.text("and this")]),
+            .paragraph([.text("Five * three [is] {not} markup.")]), .paragraph([]),
+            .paragraph([.text("INT. HOUSE")]),
+        ])
+        // And it saves as the same words, escaped where Markdown needs it.
+        #expect(ScriptMarkdown.parse(ScriptMarkdown.serialize(blocks)) == blocks)
+    }
+}

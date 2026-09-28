@@ -186,7 +186,9 @@ struct ScriptEditorView: NSViewRepresentable {
             // Voice strips the writer's own working marks; Writer and Editor
             // both keep everything — Editor is read-only, not stripped-down.
             let blocks = mode == .voice ? parsed.filter {
+                // Notes and synopses are both the writer's, not the voice's.
                 if case .note = $0.kind { return false }
+                if case .synopsis = $0.kind { return false }
                 return true
             } : parsed
             for (index, block) in blocks.enumerated() {
@@ -196,6 +198,7 @@ struct ScriptEditorView: NSViewRepresentable {
                 case .heading(2): style = .heading2
                 case .heading: style = .heading3
                 case .note: style = .note
+                case .synopsis: style = .synopsis
                 case .paragraph: style = .body
                 }
                 let baseAttributes = ScriptStyle.attributes(for: style, alignment: block.alignment)
@@ -330,6 +333,7 @@ struct ScriptEditorView: NSViewRepresentable {
                         case .heading2: kind = .heading(level: 2)
                         case .heading3: kind = .heading(level: 3)
                         case .note: kind = .note
+                        case .synopsis: kind = .synopsis
                         case .body: break
                         }
                     }
@@ -551,6 +555,7 @@ struct ScriptEditorView: NSViewRepresentable {
             case .heading(2): style = .heading2
             case .heading: style = .heading3
             case .note: style = .note
+            case .synopsis: style = .synopsis
             case .body: style = .body
             case .alignment: return // handled above
             }
@@ -1767,7 +1772,7 @@ enum ScriptStyle {
     }
 
     enum Paragraph: String {
-        case body, heading1, heading2, heading3, note
+        case body, heading1, heading2, heading3, note, synopsis
     }
 
     /// Notes are azure: the chips are gold and page ranges are vermillion, so
@@ -1786,6 +1791,10 @@ enum ScriptStyle {
         case .note:
             let base = NSFont.systemFont(ofSize: 13)
             font = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
+        case .synopsis:
+            // A label for the section above it, not a line to read: small
+            // and quiet, but upright, so it doesn't pass for a note.
+            font = .systemFont(ofSize: 12, weight: .medium)
         }
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = style == .body || style == .note ? 4 : 2
@@ -1799,6 +1808,7 @@ enum ScriptStyle {
         let colour: NSColor
         switch style {
         case .note: colour = noteColour
+        case .synopsis: colour = NSColor.white.withAlphaComponent(0.5)
         case .body: colour = NSColor.white.withAlphaComponent(0.92)
         default: colour = .white
         }

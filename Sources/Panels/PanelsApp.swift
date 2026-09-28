@@ -96,6 +96,11 @@ struct PanelsApp: App {
                 Button(model.isWritingNote ? "End Note" : "Note to Editor") { model.toggleNote() }
                     .keyboardShortcut("n")
                     .disabled(model.project == nil)
+                // Fountain's `= synopsis`: what the section above is about.
+                // Labels it in the shot list; never read aloud.
+                Button("Synopsis") { model.format(.synopsis) }
+                    .keyboardShortcut("=", modifiers: [.command, .option])
+                    .disabled(model.project == nil)
                 Divider()
                 Button("Copy Script for Google Docs") { model.copyScriptAsPlainText() }
                     .disabled(model.project == nil)

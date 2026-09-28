@@ -255,6 +255,8 @@ enum ScriptCommand: Equatable {
     case body
     /// An aside for the editor rather than something to read aloud.
     case note
+    /// A short label for the section it's in — Fountain's `= synopsis`.
+    case synopsis
     /// Left, centered, or right — independent of the paragraph's kind.
     case alignment(ScriptAlignment)
 }

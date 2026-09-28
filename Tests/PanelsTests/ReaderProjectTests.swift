@@ -840,6 +840,32 @@ struct ReaderProjectTests {
         return (coordinator, textView, project)
     }
 
+    @Test("Fountain-lite survives the editor: synopses, notes and cites come back out exactly as they went in")
+    func fountainLiteThroughTheEditor() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let script = """
+        # Act One: The Brand
+        = Guts before the Eclipse.
+        <span:k7m2pq> The brand is already bleeding [p. 12](panels://cite/c1abcd).
+        > Hold on this panel for two beats
+        He screams: I WON'T DIE HERE.
+        ## The Eclipse
+        = Griffith's choice.
+        """
+        let (coordinator, textView, project) = try editor(script: script, in: scratch)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(project.script == script)
+
+        // A synopsis is made the same way a note is: a style on the line.
+        let line = (textView.string as NSString).range(of: "He screams")
+        textView.setSelectedRange(NSRange(location: line.location, length: 0))
+        coordinator.apply(.synopsis)
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script)[4] == .synopsis([.text("He screams: I WON'T DIE HERE.")]))
+        #expect(ScriptMarkdown.citationIDs(in: project.script) == ["c1abcd"])
+    }
+
     @Test("Formatting a paragraph inside a block does not knock it out of the block")
     func headingKeepsTheBlock() throws {
         let scratch = try Scratch()
