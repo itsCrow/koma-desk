@@ -866,6 +866,35 @@ struct ReaderProjectTests {
         #expect(ScriptMarkdown.citationIDs(in: project.script) == ["c1abcd"])
     }
 
+    @Test("Pasting a Fountain-lite outline keeps its structure; pasting prose keeps it prose")
+    func pastesFountainLite() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "", in: scratch)
+        // Wired the way `ScriptEditorView.makeNSView` wires it.
+        textView.attributedString = { [weak coordinator] markdown in coordinator?.render(markdown) ?? NSAttributedString() }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("PanelsTests-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+
+        pasteboard.clearContents()
+        pasteboard.setString("# Act One\n= The setup\n[[check the scan]]\nFive * three is fifteen.", forType: .string)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        #expect(textView.readSelection(from: pasteboard, type: .string))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script) == [
+            .heading(level: 1, [.text("Act One")]), .synopsis([.text("The setup")]),
+            .note([.text("check the scan")]), .paragraph([.text("Five * three is fifteen.")]),
+        ])
+
+        // Prose with nothing structural in it goes in as the words it is.
+        pasteboard.clearContents()
+        pasteboard.setString(" More words.", forType: .string)
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        #expect(textView.readSelection(from: pasteboard, type: .string))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(ScriptMarkdown.parse(project.script).last == .paragraph([.text("Five * three is fifteen. More words.")]))
+    }
+
     @Test("Formatting a paragraph inside a block does not knock it out of the block")
     func headingKeepsTheBlock() throws {
         let scratch = try Scratch()

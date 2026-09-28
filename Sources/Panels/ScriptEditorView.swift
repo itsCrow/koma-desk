@@ -1636,16 +1636,29 @@ final class ScriptTextView: NSTextView {
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         // Whatever type AppKit settled on, the Markdown is the faithful one
         // when it's there.
-        if let markdown = pboard.string(forType: Self.markdownType),
-           let piece = attributedString?(markdown) {
-            let range = rangeForUserTextChange
-            guard range.location != NSNotFound, shouldChangeText(in: range, replacementString: piece.string) else { return false }
-            textStorage?.replaceCharacters(in: range, with: piece)
-            didChangeText()
-            setSelectedRange(NSRange(location: range.location + piece.length, length: 0))
-            return true
+        if let markdown = pboard.string(forType: Self.markdownType) {
+            return insertMarkdown(markdown)
+        }
+        // Plain text from elsewhere with Fountain-lite structure in it — an
+        // outline drafted in Notes, the text of a .fountain file — keeps its
+        // sections, synopses and notes. Plain prose stays plain words, and
+        // nothing inline is read as markup either way.
+        if let text = pboard.string(forType: .string), FountainLite.hasStructure(text) {
+            return insertMarkdown(ScriptMarkdown.serialize(FountainLite.blocks(fromPlainText: text)))
         }
         return super.readSelection(from: pboard, type: type)
+    }
+
+    /// Script Markdown in at the selection, rendered the way the editor
+    /// renders the file.
+    private func insertMarkdown(_ markdown: String) -> Bool {
+        guard let piece = attributedString?(markdown) else { return false }
+        let range = rangeForUserTextChange
+        guard range.location != NSNotFound, shouldChangeText(in: range, replacementString: piece.string) else { return false }
+        textStorage?.replaceCharacters(in: range, with: piece)
+        didChangeText()
+        setSelectedRange(NSRange(location: range.location + piece.length, length: 0))
+        return true
     }
 
     override func mouseDown(with event: NSEvent) {
