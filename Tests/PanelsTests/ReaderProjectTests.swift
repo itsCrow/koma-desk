@@ -926,6 +926,18 @@ struct ReaderProjectTests {
         #expect(sections.flatMap { $0.shots.map(\.citation.id) } == project.citationsInScriptOrder.map(\.id))
     }
 
+    @Test("Styling a line in a script with nothing in it yet doesn't crash")
+    func stylesAnEmptyScript() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let (coordinator, textView, project) = try editor(script: "", in: scratch)
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        coordinator.apply(.heading(1))
+        textView.insertText("Act One", replacementRange: textView.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(project.script == "# Act One")
+    }
+
     @Test("Formatting a paragraph inside a block does not knock it out of the block")
     func headingKeepsTheBlock() throws {
         let scratch = try Scratch()

@@ -559,7 +559,12 @@ struct ScriptEditorView: NSViewRepresentable {
             case .body: style = .body
             case .alignment: return // handled above
             }
-            let alignment = ScriptStyle.alignment(of: storage.attribute(.paragraphStyle, at: min(paragraph.location, max(storage.length - 1, 0)), effectiveRange: nil) as? NSParagraphStyle)
+            // An empty script has no character to read the alignment off —
+            // asking for index 0 of nothing throws — so it's the cursor's.
+            let paragraphStyle = storage.length > 0
+                ? storage.attribute(.paragraphStyle, at: min(paragraph.location, storage.length - 1), effectiveRange: nil)
+                : textView.typingAttributes[.paragraphStyle]
+            let alignment = ScriptStyle.alignment(of: paragraphStyle as? NSParagraphStyle)
             let attributes = ScriptStyle.attributes(for: style, alignment: alignment)
             // A style command can act on more than one paragraph at once —
             // the toolbar's style menu isn't limited to the cursor's own
