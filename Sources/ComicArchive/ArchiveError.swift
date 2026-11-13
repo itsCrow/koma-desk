@@ -22,7 +22,7 @@ public enum ArchiveError: Error, LocalizedError, Equatable {
         case .unreadableFile(let filename, _):
             return "“\(filename)” couldn’t be read."
         case .cacheFailure:
-            return "Panels couldn’t create its temporary working folder."
+            return "Koma Desk couldn’t create its temporary working folder."
         }
     }
 

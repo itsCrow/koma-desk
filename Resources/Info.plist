@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Panels MVP</string>
+	<string>Koma Desk</string>
 	<key>CFBundleDisplayName</key>
-	<string>Panels MVP</string>
+	<string>Koma Desk</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.mida.PanelsMVP</string>
 	<key>CFBundleExecutable</key>
-	<string>PanelsMVP</string>
+	<string>Koma Desk</string>
 	<key>CFBundleIconFile</key>
 	<string>Panels</string>
 	<key>CFBundlePackageType</key>

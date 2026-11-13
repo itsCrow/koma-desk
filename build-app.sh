@@ -1,12 +1,11 @@
 #!/bin/bash
-# Assembles a double-clickable PanelsMVP.app from the SwiftPM build product.
-# Named PanelsMVP so it sits alongside the commercial Panels in /Applications
-# rather than replacing it.
+# Assembles a double-clickable Koma Desk.app from the SwiftPM build product.
+# Named apart from the commercial Panels app in /Applications.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP="build/PanelsMVP.app"
+APP="build/Koma Desk.app"
 CONTENTS="$APP/Contents"
 
 echo "==> Building release binary"
@@ -16,16 +15,24 @@ echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
-cp ".build/release/Panels" "$CONTENTS/MacOS/PanelsMVP"
+cp ".build/release/Panels" "$CONTENTS/MacOS/Koma Desk"
 cp "Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "Resources/Panels.icns" "$CONTENTS/Resources/Panels.icns"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
 echo "==> Signing (ad-hoc)"
-# Ad-hoc is enough for a locally built personal app; no sandbox, so Panels can
-# read comics from anywhere on disk without entitlement plumbing.
+# Ad-hoc signing lets the app run on Apple silicon. A downloaded copy is
+# still blocked once by Gatekeeper; the README tells people to use
+# System Settings → Privacy & Security → Open Anyway.
 codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --verbose=1 "$APP"
+
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist")
+ZIP="build/KomaDesk-${VERSION}.zip"
+echo "==> Zipping $ZIP"
+rm -f "$ZIP"
+# ditto keeps the app bundle intact. Plain zip can break the signature.
+ditto -c -k --keepParent "$APP" "$ZIP"
 
 echo "==> Registering document types with Launch Services"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
@@ -33,5 +40,6 @@ echo "==> Registering document types with Launch Services"
 
 echo
 echo "Built $(cd "$APP" && pwd)"
+echo "Zip:   $(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")"
 echo "Run it with:  open '$(cd "$APP" && pwd)'"
 echo "Install it with:  cp -R '$(cd "$APP" && pwd)' /Applications/"

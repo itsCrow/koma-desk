@@ -20,12 +20,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         MainActor.assumeIsolated { Lettering.installCopyMonitor(model: ReaderModel.shared) }
 
-        // Every comic read leaves its extracted (or downloaded) pages behind.
-        // Trim the oldest ones at launch, while nothing is open and nothing
-        // can be in use.
+        // Chapters imported from a link stay until the user removes the series.
+        // Anything still in the old temporary folder is brought across first.
+        RemoteComicSource.migrateLegacyCacheIfNeeded()
+
+        // A local comic's pages are extracted from a file the user already has.
+        // Those copies are trimmed so opening a lot of volumes doesn't fill the disk.
         Task.detached(priority: .background) {
             ComicArchive.pruneCache()
-            RemoteComicSource.pruneCache()
         }
     }
 

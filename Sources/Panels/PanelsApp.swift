@@ -7,7 +7,7 @@ struct PanelsApp: App {
     @State private var model = ReaderModel.shared
 
     var body: some Scene {
-        Window("Panels", id: "reader") {
+        Window("Koma Desk", id: "reader") {
             ReaderView(model: model)
         }
         // A two-page spread is about 1.4:1. The old default of 900x512 was

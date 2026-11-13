@@ -137,6 +137,7 @@ private struct SeriesCard: View {
 
     var body: some View {
         let isOpen = model.series?.name == series.name
+        let fromALink = model.library.isRemoteSeries(series)
         Button(action: open) {
             VStack(alignment: .leading, spacing: 9) {
                 CoverView(model: model, itemID: series.items.first?.id, fill: true)
@@ -173,6 +174,7 @@ private struct SeriesCard: View {
                         .font(Typography.caption)
                         .foregroundStyle(Palette.textTertiary)
                         .lineLimit(1)
+                    RemoteRefreshStatus(model: model, seriesName: series.name)
                 }
             }
             .contentShape(Rectangle())
@@ -185,7 +187,12 @@ private struct SeriesCard: View {
         .contextMenu {
             Button("Read") { model.read(series) }
             Button("New Project…") { model.requestNewProject(series: series.name) }
-            if model.library.isRemoteSeries(series) {
+            if fromALink {
+                Divider()
+                Button("Update") {
+                    Task { await model.checkForNewChapters(named: series.name) }
+                }
+                .disabled(model.library.isCheckingForChapters(series.name))
                 Divider()
                 Button("Remove Series", role: .destructive) {
                     if model.series?.name == series.name { model.closeComicToHome() }
@@ -196,11 +203,67 @@ private struct SeriesCard: View {
     }
 }
 
+/// Under a series' name: "Checking…", "2 new chapters", "Up to date", or why
+/// a check failed. Absent when there's nothing to say.
+struct RemoteRefreshStatus: View {
+    @Bindable var model: ReaderModel
+    let seriesName: String
+    var topPadding: CGFloat = 0
+    /// The series page says "Updating" on the button itself. The shelf has
+    /// no button, so it still needs this line.
+    var showsActivity: Bool = true
+
+    var body: some View {
+        if showsActivity, model.library.isCheckingForChapters(seriesName) {
+            status("Updating…", color: Palette.textTertiary, lines: 1)
+        } else if !model.library.isCheckingForChapters(seriesName),
+                  let notice = model.library.remoteRefreshNotice[seriesName] {
+            status(notice.message, color: color(for: notice.kind), lines: 2)
+        }
+    }
+
+    private func status(_ message: String, color: Color, lines: Int) -> some View {
+        Text(message)
+            .font(Typography.caption)
+            .foregroundStyle(color)
+            .lineLimit(lines)
+            .padding(.top, topPadding)
+    }
+
+    private func color(for kind: RemoteRefreshNotice.Kind) -> Color {
+        switch kind {
+        case .newChapters: return Palette.noteColor
+        case .upToDate: return Palette.textTertiary
+        case .failed: return Palette.pageRangeColor
+        }
+    }
+}
+
+/// Right-click on a chapter that came from a link. A folder of files you
+/// already have has nothing to redownload, so it doesn't grow an empty menu.
+struct RedownloadChapterMenu: ViewModifier {
+    var enabled: Bool
+    var isBusy: Bool = false
+    let redownload: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.contextMenu {
+                Button("Redownload Chapter", action: redownload)
+                    .disabled(isBusy)
+            }
+        } else {
+            content
+        }
+    }
+}
+
 /// Next to a series' name while its chapters are prefetching: a sliver of a
 /// bar and a count while it runs, a checkmark for a moment once every
 /// chapter has settled — proof the whole series downloaded, not just the
 /// one chapter someone happened to open.
-private struct DownloadProgressBadge: View {
+struct DownloadProgressBadge: View {
     let progress: Library.DownloadProgress
 
     var body: some View {

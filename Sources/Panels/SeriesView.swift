@@ -36,6 +36,10 @@ struct SeriesView: View {
             .padding(.top, 2)
             .padding(.bottom, 28)
         }
+        .onAppear {
+            let opened = series
+            Task { await model.refreshSeriesIfStale(opened) }
+        }
     }
 
     // MARK: - Contents
@@ -106,34 +110,74 @@ private struct SeriesHero: View {
                     .font(Typography.heading)
                     .foregroundStyle(Palette.textSecondary)
                     .padding(.top, 4)
-
-                if let progress, let pickUp {
-                    HStack(spacing: 10) {
-                        ProgressRing(fraction: progress, lineWidth: 2.5)
-                            .frame(width: 18, height: 18)
-                        Text("\(pickUp.label) · \(Int((progress * 100).rounded()))% through the series")
-                            .font(Typography.body)
-                            .foregroundStyle(Palette.textSecondary)
-                    }
-                    .padding(.top, 16)
+                if let download = model.library.remoteDownloadProgress[series.name] {
+                    DownloadProgressBadge(progress: download)
+                        .padding(.top, 8)
                 }
 
-                HStack(spacing: 10) {
-                    Button { model.read(series) } label: {
-                        Label(progress == nil ? "Start Reading" : "Continue", systemImage: "play.fill")
-                    }
-                    .glassButtonStyle(prominent: true)
-                    .disabled(pickUp == nil)
-                    Button { model.requestNewProject(series: series.name) } label: {
-                        Label("New Project", systemImage: "plus")
-                    }
-                    .glassButtonStyle()
-                }
-                .controlSize(.large)
-                .padding(.top, 20)
+                SeriesActions(model: model, series: series, canRead: pickUp != nil, hasProgress: progress != nil)
+                    .padding(.top, 22)
             }
             .padding(.bottom, 8)
             Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Continue is the one thing this page is for. New Project and Update sit
+/// under it, smaller, so they read as other things you can do — not as
+/// three equal buttons.
+private struct SeriesActions: View {
+    @Bindable var model: ReaderModel
+    let series: Series
+    let canRead: Bool
+    let hasProgress: Bool
+
+    private var checking: Bool { model.library.isCheckingForChapters(series.name) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { model.read(series) } label: {
+                Label(hasProgress ? "Continue" : "Start Reading", systemImage: "play.fill")
+                    .frame(minWidth: 132, alignment: .center)
+            }
+            .glassButtonStyle(prominent: true)
+            .controlSize(.large)
+            .disabled(!canRead)
+
+            HStack(alignment: .center, spacing: 2) {
+                Button { model.requestNewProject(series: series.name) } label: {
+                    Label("New Project", systemImage: "square.and.pencil")
+                }
+                .buttonStyle(QuietButtonStyle())
+
+                if model.library.isRemoteSeries(series) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.16))
+                        .frame(width: 1, height: 14)
+                        .padding(.horizontal, 4)
+
+                    Button {
+                        Task { await model.checkForNewChapters(named: series.name) }
+                    } label: {
+                        if checking {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Updating")
+                            }
+                        } else {
+                            Label("Update", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(QuietButtonStyle())
+                    .disabled(checking)
+                    .help("Check this series for new chapters")
+
+                    RemoteRefreshStatus(model: model, seriesName: series.name, showsActivity: false)
+                        .frame(maxWidth: 280, alignment: .leading)
+                }
+            }
         }
     }
 }
@@ -192,6 +236,12 @@ private struct ItemRow: View {
             hovered = inside
             if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
+        .modifier(RedownloadChapterMenu(
+            enabled: model.library.isRemoteItem(item),
+            isBusy: model.isLoading && model.item?.id == item.id
+        ) {
+            model.redownloadChapter(item)
+        })
     }
 
     @ViewBuilder

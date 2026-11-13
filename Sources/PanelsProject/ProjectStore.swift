@@ -10,9 +10,9 @@ public enum ProjectError: LocalizedError, Equatable {
         switch self {
         case .unsupportedVersion(let version):
             if version > ProjectManifest.currentVersion {
-                return "This project was made by a newer version of Panels (format \(version)) and can’t be opened."
+                return "This project was made by a newer version of Koma Desk (format \(version)) and can’t be opened."
             }
-            return "This project was made by an earlier version of Panels (format \(version)) and can’t be opened."
+            return "This project was made by an earlier version of Koma Desk (format \(version)) and can’t be opened."
         }
     }
 }

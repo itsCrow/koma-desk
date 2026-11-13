@@ -145,9 +145,17 @@ final class ReaderModel {
     /// Set while a remote chapter's pages are downloading: (downloaded, total).
     /// A bare spinner reads as a hang for a multi-page download.
     private(set) var remoteFetchProgress: (done: Int, total: Int)?
-    /// Width-to-height of a two-page spread of the open comic. The window keeps
-    /// this shape, which is what lets a spread fill it with no bars either side.
+    /// Width-to-height of a two-page spread of the open comic. The window uses
+    /// this while two pages are on screen, so a spread fills it with no bars.
     private(set) var spreadAspect: CGFloat?
+    /// One page's width-to-height. The window uses this in single-page layout
+    /// so the page fills the window instead of being cropped by a spread-shaped one.
+    private(set) var pageAspect: CGFloat?
+
+    /// What the page area should be shaped to right now.
+    var windowAspect: CGFloat? {
+        pageLayout == .singlePage ? (pageAspect ?? spreadAspect) : spreadAspect
+    }
 
     /// The comic's lettering, read page by page in the background. Pages not
     /// yet read are nil; `isIndexing` is true until they're all in.
@@ -412,6 +420,7 @@ final class ReaderModel {
                             source: comic.source, pages: comic.pages, identity: comic.identity,
                             warning: comic.warning?.message, title: comic.title,
                             wideFlags: sizes.map(isWidePage), aspect: spreadAspectRatio(pageSizes: sizes),
+                            pageAspect: singlePageAspectRatio(pageSizes: sizes),
                             notesRecentDocument: true
                         )
                     }
@@ -447,6 +456,7 @@ final class ReaderModel {
             return .success(OpenedComic(
                 source: item.url, pages: comic.pages, identity: comic.identity, warning: comic.warning,
                 title: item.displayName, wideFlags: sizes.map(isWidePage), aspect: spreadAspectRatio(pageSizes: sizes),
+                pageAspect: singlePageAspectRatio(pageSizes: sizes),
                 notesRecentDocument: false
             ))
         } catch {
@@ -458,6 +468,8 @@ final class ReaderModel {
     func read(_ series: Series) {
         guard let item = library.continueItem(in: series) else { return }
         showsHome = false
+        let seriesToCheck = series
+        Task { await refreshSeriesIfStale(seriesToCheck) }
         open(item: item)
     }
 
@@ -501,6 +513,42 @@ final class ReaderModel {
         }
     }
 
+    /// Asked for: re-read this series' link, then say what came of it.
+    func checkForNewChapters(named seriesName: String) async {
+        let outcome = await library.refreshRemoteSeries(named: seriesName)
+        library.presentRefreshNotice(for: seriesName, outcome: outcome, announceUpToDate: true)
+        adoptRefreshedSeries(seriesName)
+    }
+
+    /// Opening a linked series whose last check is more than a day old.
+    /// Quiet when nothing new has come out.
+    func refreshSeriesIfStale(_ series: Series) async {
+        guard let outcome = await library.refreshRemoteSeriesIfStale(named: series.name) else { return }
+        library.presentRefreshNotice(for: series.name, outcome: outcome, announceUpToDate: false)
+        adoptRefreshedSeries(series.name)
+    }
+
+    /// Fetches one chapter's pages again. If it's the chapter on screen, the
+    /// reader reloads it; otherwise the download happens in the background.
+    func redownloadChapter(_ item: LibraryItem) {
+        guard library.isRemoteItem(item) else { return }
+        guard !(isLoading && item.id == self.item?.id) else { return }
+        library.forgetCachedPages(of: item)
+        if item.id == self.item?.id {
+            open(item: item)
+        } else {
+            library.downloadChapter(item)
+        }
+    }
+
+    /// The contents sidebar holds the series from when the comic opened.
+    /// A check that adds chapters has to hand it the updated list, or the
+    /// new chapter stays invisible until the next open.
+    private func adoptRefreshedSeries(_ name: String) {
+        guard series?.name == name, let updated = library.series(named: name) else { return }
+        series = updated
+    }
+
     private static func describeRemoteSourceError(_ error: Error) -> String {
         if let remoteError = error as? RemoteSourceError {
             return remoteError.errorDescription ?? "That link couldn’t be opened."
@@ -533,6 +581,7 @@ final class ReaderModel {
         let title: String
         let wideFlags: [Bool]
         let aspect: CGFloat?
+        let pageAspect: CGFloat?
         /// Only a real local file belongs in the Open Recent menu.
         let notesRecentDocument: Bool
     }
@@ -567,6 +616,7 @@ final class ReaderModel {
         pages = comic.pages
         wideFlags = comic.wideFlags
         spreadAspect = comic.aspect
+        pageAspect = comic.pageAspect
         pageIndexByURL = Dictionary(uniqueKeysWithValues: pages.enumerated().map { ($1, $0) })
         searchQuery = ""
         searchHits = []
@@ -632,6 +682,7 @@ final class ReaderModel {
         wideFlags = []
         warning = nil
         spreadAspect = nil
+        pageAspect = nil
         spreadIndex = 0
     }
 

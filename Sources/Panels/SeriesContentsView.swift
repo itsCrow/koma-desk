@@ -76,8 +76,11 @@ struct SeriesContentsView: View {
                             ForEach(group.items) { item in
                                 ContentsRow(item: item,
                                             isCurrent: item.id == model.item?.id,
-                                            hasStarted: model.library.hasStarted(item)) {
+                                            hasStarted: model.library.hasStarted(item),
+                                            canRedownload: model.library.isRemoteItem(item)) {
                                     model.openItem(item)
+                                } redownload: {
+                                    model.redownloadChapter(item)
                                 }
                                 .id(item.id)
                             }
@@ -101,7 +104,9 @@ private struct ContentsRow: View {
     let item: LibraryItem
     let isCurrent: Bool
     let hasStarted: Bool
+    var canRedownload = false
     let open: () -> Void
+    var redownload: () -> Void = {}
     @State private var hovered = false
 
     var body: some View {
@@ -133,6 +138,7 @@ private struct ContentsRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        .modifier(RedownloadChapterMenu(enabled: canRedownload, redownload: redownload))
     }
 }
 

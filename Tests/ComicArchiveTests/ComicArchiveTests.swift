@@ -42,26 +42,26 @@ struct SpreadTests {
     /// Convenience: no page is a double-page scan.
     static func narrow(_ count: Int) -> [Bool] { Array(repeating: false, count: count) }
 
-    @Test("The cover stands alone, then pages pair up")
-    func coverAlone() {
+    @Test("Pages pair from the first page, and a leftover last page stands alone")
+    func pairsFromTheStart() {
         let spreads = buildSpreads(pageCount: 5, isWide: Self.narrow(5))
-        #expect(spreads.map(\.pageIndices) == [[0], [1, 2], [3, 4]])
+        #expect(spreads.map(\.pageIndices) == [[0, 1], [2, 3], [4]])
     }
 
-    @Test("A trailing odd page finishes alone")
-    func trailingOdd() {
+    @Test("An even page count pairs completely")
+    func evenCount() {
         let spreads = buildSpreads(pageCount: 4, isWide: Self.narrow(4))
-        #expect(spreads.map(\.pageIndices) == [[0], [1, 2], [3]])
+        #expect(spreads.map(\.pageIndices) == [[0, 1], [2, 3]])
     }
 
     @Test("A double-page scan gets the window to itself")
     func wideAlone() {
-        // Page index 3 is a merged centrefold.
+        // Page index 3 is a merged centrefold. The page before it has no
+        // ordinary partner, so it stands alone too.
         var wide = Self.narrow(6)
         wide[3] = true
         let spreads = buildSpreads(pageCount: 6, isWide: wide)
-        // Index 2 can't pair with the wide page, so it falls solo too.
-        #expect(spreads.map(\.pageIndices) == [[0], [1, 2], [3], [4, 5]])
+        #expect(spreads.map(\.pageIndices) == [[0, 1], [2], [3], [4, 5]])
     }
 
     @Test("The page before a double-page scan is not paired with it")
@@ -69,7 +69,7 @@ struct SpreadTests {
         var wide = Self.narrow(5)
         wide[2] = true
         let spreads = buildSpreads(pageCount: 5, isWide: wide)
-        #expect(spreads.map(\.pageIndices) == [[0], [1], [2], [3, 4]])
+        #expect(spreads.map(\.pageIndices) == [[0, 1], [2], [3, 4]])
     }
 
     @Test("Consecutive double-page scans each stand alone")
@@ -97,7 +97,7 @@ struct SpreadTests {
     func shortFlags() {
         // Defensive: the flags come from a separate scan and could lag behind.
         let spreads = buildSpreads(pageCount: 4, isWide: [])
-        #expect(spreads.map(\.pageIndices) == [[0], [1, 2], [3]])
+        #expect(spreads.map(\.pageIndices) == [[0, 1], [2, 3]])
     }
 
     @Test("Real comic layout: Berserk v01, 219 pages with 9 merged centrefolds")
@@ -109,11 +109,10 @@ struct SpreadTests {
 
         let spreads = buildSpreads(pageCount: 219, isWide: wide)
 
-        #expect(spreads.count == 115)
-        #expect(spreads[0].pageIndices == [0])
-        // Page index 7 is orphaned by the centrefold at 8.
-        #expect(spreads[4].pageIndices == [7])
-        #expect(spreads[5].pageIndices == [8])
+        #expect(spreads.count == 114)
+        #expect(spreads[0].pageIndices == [0, 1])
+        // The centrefold at 8 follows a full pair, so nothing is left single before it.
+        #expect(spreads[4].pageIndices == [8])
         #expect(spreads.last?.pageIndices == [217, 218])
         // Every page appears exactly once, in order — no page lost or repeated.
         #expect(spreads.flatMap(\.pageIndices) == Array(0..<219))
@@ -175,6 +174,14 @@ struct SpreadAspectTests {
     func twoPages() throws {
         let ratio = try #require(spreadAspectRatio(pageSizes: [Self.page, Self.page, Self.page]))
         #expect(abs(ratio - 2 * 1810 / 2560) < 0.0001)
+    }
+
+    @Test("Single page uses one page's shape, not a spread's")
+    func onePage() throws {
+        let pages = [Self.page, Self.centrefold, Self.page]
+        let ratio = try #require(singlePageAspectRatio(pageSizes: pages))
+        #expect(abs(ratio - 1810 / 2560) < 0.0001)
+        #expect(singlePageAspectRatio(pageSizes: []) == nil)
     }
 
     @Test("A merged centrefold doesn't widen the spread; it already is one")

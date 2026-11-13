@@ -2,24 +2,60 @@ import CryptoKit
 import Foundation
 
 /// Reads a comic from the web: a link to a known site, or a link to a
-/// generic JSON manifest. Downloads a chapter's pages once into a local
-/// cache — the network equivalent of `ComicArchive` — so the rest of the
-/// app treats a chapter read this way exactly like one extracted from an
-/// archive.
+/// generic JSON manifest. Downloads a chapter's pages once and keeps them
+/// until the series is removed — the network equivalent of `ComicArchive` —
+/// so the rest of the app treats a chapter read this way exactly like one
+/// extracted from an archive.
 public enum RemoteComicSource {
     /// Swapped out by tests so they never touch the network.
     nonisolated(unsafe) static var fetcher: PageFetching = URLSessionFetcher()
     /// Known sites, tried in order before falling back to manifest mode.
     static let adapters: [SiteAdapter] = [WeebCentralAdapter()]
 
+    /// Tests point downloads at a scratch folder. Production leaves this nil.
+    nonisolated(unsafe) static var cacheRootOverride: URL?
+
+    /// Where a chapter's pages live. Application Support, not the temporary
+    /// directory: the system deletes that on its own schedule, which is how
+    /// a series the user still has in the library lost its pages.
     public static var cacheRoot: URL {
+        cacheRootOverride ?? persistentCacheRoot
+    }
+
+    /// The real on-disk location, ignoring any test override.
+    public static var persistentCacheRoot: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return support.appendingPathComponent("PanelsMVP/RemotePages", isDirectory: true)
+    }
+
+    /// Downloads used to live here. Moved once into `persistentCacheRoot`.
+    private static var legacyCacheRoot: URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("PanelsRemote", isDirectory: true)
     }
 
-    /// Downloaded chapters are typically much smaller per-volume than local
-    /// archives (single chapters, not whole tankōbon), so a smaller budget
-    /// still holds plenty of recently-read material.
-    public static let defaultCacheBudget = 2 << 30  // 2 GB
+    /// Moves chapters downloaded before the cache left the temporary folder.
+    /// A chapter already in the new location wins; the leftover copy is dropped.
+    public static func migrateLegacyCacheIfNeeded() {
+        migrateLegacyCache(from: legacyCacheRoot, into: persistentCacheRoot)
+    }
+
+    static func migrateLegacyCache(from legacy: URL, into root: URL) {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(
+            at: legacy, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ), !entries.isEmpty else { return }
+        try? manager.createDirectory(at: root, withIntermediateDirectories: true)
+        for entry in entries {
+            let destination = root.appendingPathComponent(entry.lastPathComponent, isDirectory: true)
+            if manager.fileExists(atPath: destination.path) {
+                try? manager.removeItem(at: entry)
+            } else {
+                try? manager.moveItem(at: entry, to: destination)
+            }
+        }
+        try? manager.removeItem(at: legacy)
+    }
 
     /// Given any URL the user pastes, finds the series and its chapters —
     /// via a matching site adapter, or by treating the URL as a manifest.
@@ -80,33 +116,6 @@ public enum RemoteComicSource {
     public static func forget(_ source: ChapterSource) {
         let directory = cacheRoot.appendingPathComponent(cacheKey(for: source), isDirectory: true)
         try? FileManager.default.removeItem(at: directory)
-    }
-
-    /// Trims the download cache to `budget` bytes, dropping the
-    /// least-recently-read chapters first. Mirrors `ComicArchive.pruneCache`.
-    public static func pruneCache(in root: URL = cacheRoot, budget: Int = defaultCacheBudget) {
-        let manager = FileManager.default
-        guard let entries = try? manager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return }
-
-        let chapters = entries
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
-            .map { url in
-                let read = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate ?? .distantPast
-                return (url: url, lastRead: read, size: directorySize(url))
-            }
-            .sorted { $0.lastRead > $1.lastRead }
-
-        var kept = 0
-        for (rank, chapter) in chapters.enumerated() {
-            kept += chapter.size
-            guard rank > 0, kept > budget else { continue }
-            try? manager.removeItem(at: chapter.url)
-        }
     }
 
     // MARK: - Resolving pages
@@ -202,26 +211,11 @@ public enum RemoteComicSource {
 
         let pages = manifest.pages.map { directory.appendingPathComponent($0) }
         guard pages.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else { return nil }
-        // Counts as a read, so pruning measures least-recently-*used*.
-        try? FileManager.default.setAttributes(
-            [.modificationDate: Date()], ofItemAtPath: directory.path
-        )
         return RemoteComic(source: source, identity: identity, pages: pages, warning: manifest.warning)
     }
 
     private static func saveManifest(_ manifest: Manifest, in directory: URL) {
         guard let data = try? JSONEncoder().encode(manifest) else { return }
         try? data.write(to: manifestURL(in: directory), options: .atomic)
-    }
-
-    private static func directorySize(_ directory: URL) -> Int {
-        guard let enumerator = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.fileSizeKey]
-        ) else { return 0 }
-        return enumerator.reduce(into: 0) { total, entry in
-            guard let file = entry as? URL else { return }
-            total += (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        }
     }
 }

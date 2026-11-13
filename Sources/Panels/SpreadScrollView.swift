@@ -59,6 +59,10 @@ final class SpreadScrollView: NSScrollView {
         hasVerticalScroller = false
         hasHorizontalScroller = false
         allowsMagnification = true
+        // A page larger than the window must not paint past the panel. On
+        // recent macOS a view does not clip its subviews unless asked, and an
+        // unclipped page shows up below the one you're reading.
+        clipsToBounds = true
     }
 
     required init?(coder: NSCoder) {
@@ -85,6 +89,10 @@ final class SpreadScrollView: NSScrollView {
     func isShowing(spreadAt index: Int, in model: ReaderModel) -> Bool {
         spreadIndex == index && pageURLs == model.orderedPages(forSpreadAt: index).map(\.url)
     }
+
+    /// The pages have been decoded and drawn. A turn onto a panel that isn't
+    /// ready yet is just the strip's black background sliding into view.
+    var isReady: Bool { pageView.hasImages }
 
     /// Search hits to draw, keyed by page file; only this panel's pages matter.
     func setHighlights(_ byPage: [URL: [CGRect]]) {
@@ -123,7 +131,11 @@ final class SpreadScrollView: NSScrollView {
     /// away into the middle of a black void.
     private func updateMagnificationLimits(resettingToFit: Bool) {
         let content = pageView.frame.size
-        let viewport = contentView.frame.size
+        // The scroll view's own bounds, not the clip view's frame. Under
+        // magnification the clip view's frame can grow to the page, which
+        // makes "fitted" mean native size — a portrait page then runs off the
+        // bottom of a window shaped for a spread.
+        let viewport = bounds.size
         guard content.width > 0, content.height > 0,
               viewport.width > 0, viewport.height > 0
         else { return }
@@ -171,6 +183,13 @@ final class SpreadScrollView: NSScrollView {
 
     override func scrollWheel(with event: NSEvent) {
         if shouldYieldToStrip(for: event), swipeCoordinator?.beginSwipe(with: event) == true {
+            return
+        }
+        // A fitted page in the horizontal reader already shows the whole page.
+        // A vertical scroll there has nowhere to go inside this page, and
+        // letting it through reveals the page parked underneath.
+        if isFitted, swipeCoordinator != nil,
+           abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) {
             return
         }
         super.scrollWheel(with: event)
@@ -269,6 +288,8 @@ private final class SpreadDocumentView: NSView {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
+
+    var hasImages: Bool { !images.isEmpty }
 
     func isShowing(_ candidates: [NSImage]) -> Bool {
         // PageCache hands back the same instance for a given page, so identity

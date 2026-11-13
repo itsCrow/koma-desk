@@ -32,6 +32,13 @@ struct ManifestSourceTests {
     let page1 = URL(string: "https://example.com/ch1/001.jpg")!
     let page2 = URL(string: "https://example.com/ch1/002.jpg")!
 
+    init() {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsRemoteTests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        RemoteComicSource.cacheRootOverride = root
+    }
+
     func manifestJSON() -> Data {
         let json = """
         {
@@ -123,3 +130,30 @@ struct ManifestSourceTests {
 }
 
 } // extension RemoteComicSourceFetcherTests
+
+@Suite("Downloaded chapters stay until the series is removed")
+struct RemoteCacheLifetimeTests {
+    @Test("A chapter left in the temporary folder moves, and an existing copy is kept")
+    func migratesWithoutReplacing() throws {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsRemoteMigrate-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let legacy = scratch.appendingPathComponent("legacy", isDirectory: true)
+        let dest = scratch.appendingPathComponent("dest", isDirectory: true)
+        let kept = dest.appendingPathComponent("already", isDirectory: true)
+        let moving = legacy.appendingPathComponent("moving", isDirectory: true)
+        let duplicate = legacy.appendingPathComponent("already", isDirectory: true)
+        try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: moving, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: duplicate, withIntermediateDirectories: true)
+        try Data([1]).write(to: kept.appendingPathComponent("page.jpg"))
+        try Data([2]).write(to: moving.appendingPathComponent("page.jpg"))
+        try Data([3]).write(to: duplicate.appendingPathComponent("page.jpg"))
+
+        RemoteComicSource.migrateLegacyCache(from: legacy, into: dest)
+
+        #expect(try Data(contentsOf: dest.appendingPathComponent("already/page.jpg")) == Data([1]))
+        #expect(try Data(contentsOf: dest.appendingPathComponent("moving/page.jpg")) == Data([2]))
+        #expect(!FileManager.default.fileExists(atPath: legacy.path))
+    }
+}

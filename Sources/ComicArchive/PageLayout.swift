@@ -51,14 +51,26 @@ public func spreadAspectRatio(pageSizes: [CGSize?]) -> CGFloat? {
     return sorted[sorted.count / 2]
 }
 
-/// Pairs pages the way a physical comic falls: the cover stands alone, then
-/// pages face each other two at a time. A page that is wider than it is tall is
-/// a double-page scan and gets the window to itself — and so does the page
-/// before it, since there is nothing left to face.
+/// The width-to-height ratio of one page, for when the reader shows a single
+/// page rather than a spread. Same median as `spreadAspectRatio`, without the
+/// doubling — a portrait page then fills a portrait window instead of being
+/// cropped by a window built for two pages side by side.
+public func singlePageAspectRatio(pageSizes: [CGSize?]) -> CGFloat? {
+    let measured = pageSizes.compactMap { $0 }.filter { $0.width > 0 && $0.height > 0 }
+    guard !measured.isEmpty else { return nil }
+    let singles = measured.filter { !isWidePage($0) }
+    let ratios = (singles.isEmpty ? measured : singles).map { $0.width / $0.height }.sorted()
+    return ratios[ratios.count / 2]
+}
+
+/// Pairs ordinary pages two at a time from the first page. A page wider than
+/// it is tall is a double-page scan and keeps the window to itself. The only
+/// ordinary page shown alone is one with no partner left: the last page of
+/// the book, or the page sitting immediately before a double-page scan.
 public func buildSpreads(pageCount: Int, isWide: [Bool]) -> [Spread] {
     guard pageCount > 0 else { return [] }
-    var spreads: [Spread] = [Spread(pageIndices: [0])]
-    var index = 1
+    var spreads: [Spread] = []
+    var index = 0
     while index < pageCount {
         let currentIsWide = isWide.indices.contains(index) && isWide[index]
         let nextIsWide = isWide.indices.contains(index + 1) && isWide[index + 1]

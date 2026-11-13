@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The home screen: a floating glass sidebar of destinations (what's being
-/// read, the library, projects) over whichever one is picked, all on one
-/// dark surface. Fills the window, title bar and all, when nothing is open;
+/// The home screen: a sidebar of destinations (what's being read, the
+/// library, projects) beside whichever one is picked, all on one dark
+/// surface. Fills the window, title bar and all, when nothing is open;
 /// lies over the pages as a rounded panel (⇧⌘O) when something is.
 struct HomeView: View {
     @Bindable var model: ReaderModel
@@ -12,8 +12,6 @@ struct HomeView: View {
     /// window's buttons.
     var titlebarInset: CGFloat = 0
 
-    /// How far the sidebar floats in from the panel's edges.
-    static let inset: CGFloat = 12
     static let sidebarWidth: CGFloat = 200
 
     var body: some View {
@@ -33,19 +31,17 @@ struct HomeView: View {
             .id(model.homeTab)
             .transition(.opacity.combined(with: .scale(scale: 0.985)))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.leading, Self.sidebarWidth + Self.inset)
+            .padding(.leading, Self.sidebarWidth)
             .padding(.top, titlebarInset)
 
-            // Filling the window, the sidebar runs up under the title bar and
-            // the window's buttons sit in its glass, the way Tahoe's own
-            // sidebars hold them; its contents start below them.
+            // A column, not a card: flush with the left, top and bottom of
+            // the window, with the window's buttons sitting in its top.
             // Only the sidebar and the background go up there, though: a
             // scroll view reaching under the title bar makes the system draw
             // a band of its own across it.
             HomeSidebar(model: model, topClearance: titlebarInset)
                 .frame(width: Self.sidebarWidth)
                 .frame(maxHeight: .infinity)
-                .padding(Self.inset)
         }
         .animation(.smooth(duration: 0.3), value: model.homeTab)
         .overlay(alignment: .topTrailing) {
@@ -83,6 +79,11 @@ private struct HomeSidebar: View {
     let topClearance: CGFloat
     @Namespace private var selection
     @FocusState private var searchFocused: Bool
+    /// 0 until the writer chooses, which stays open. 1 open, 2 closed.
+    /// A Bool would come back false the first time, before any choice.
+    @AppStorage("PanelsProjectsSidebarExpanded") private var projectsDisclosure = 0
+
+    private var projectsOpen: Bool { projectsDisclosure != 2 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -90,13 +91,18 @@ private struct HomeSidebar: View {
                 .padding(.bottom, 10)
             item("Reading Now", icon: "book.fill", tab: .reading)
             item("Library", icon: "books.vertical.fill", tab: .library)
-            item("Projects", icon: "doc.text.fill", tab: .projects)
+            projectsSection
             Spacer(minLength: 0)
         }
         .padding(10)
         .padding(.top, 8 + topClearance)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .glassPanel(cornerRadius: Radius.large)
+        .background(Color.white.opacity(0.035))
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Palette.hairline)
+                .frame(width: 1)
+        }
         .onChange(of: model.wantsHomeSearchFocus) { _, wants in
             guard wants else { return }
             searchFocused = true
@@ -164,6 +170,199 @@ private struct HomeSidebar: View {
         }
         .buttonStyle(.plain)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: model.homeTab)
+    }
+
+    /// Projects, with a disclosure for the few most recently opened. The
+    /// arrow is its own button so choosing the tab doesn't fold the list.
+    private var projectsSection: some View {
+        let selected = model.homeTab == .projects
+        let recent = recentProjects
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 0) {
+                Button {
+                    model.homeTab = .projects
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "doc.text.fill")
+                            .font(.system(size: 14, weight: selected ? .semibold : .regular))
+                            .symbolRenderingMode(.hierarchical)
+                            .symbolEffect(.bounce, value: selected)
+                            .frame(width: 18)
+                        Text("Projects")
+                            .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(selected ? Palette.textPrimary : Palette.textSecondary)
+                    .padding(.leading, 12)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if !model.projects.summaries.isEmpty {
+                    Button {
+                        withAnimation(.smooth(duration: 0.22)) {
+                            projectsDisclosure = projectsOpen ? 2 : 1
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Palette.textTertiary)
+                            .rotationEffect(.degrees(projectsOpen ? 0 : -90))
+                            .frame(width: 22, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 4)
+                    .help(projectsOpen ? "Hide recent projects" : "Show recent projects")
+                }
+            }
+            .padding(.trailing, model.projects.summaries.isEmpty ? 12 : 0)
+            .background {
+                if selected {
+                    Capsule()
+                        .fill(Palette.surfaceSelected)
+                        .overlay(Capsule().strokeBorder(Palette.selectionStroke, lineWidth: 1))
+                        .matchedGeometryEffect(id: "selection", in: selection)
+                }
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: model.homeTab)
+
+            if projectsOpen {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(recent) { summary in
+                        RecentProjectRow(
+                            summary: summary,
+                            words: model.projects.previews[summary.url]?.words,
+                            isCurrent: model.project?.url.standardizedFileURL == summary.url.standardizedFileURL
+                        ) {
+                            model.switchTo(summary.url)
+                        }
+                        .task(id: summary.url.path + (summary.edited?.description ?? "")) {
+                            await model.projects.loadPreview(for: summary)
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    /// A handful, most recently worked on first. A search narrows them the
+    /// same way it narrows the rest of home.
+    private var recentProjects: [ProjectSummary] {
+        let sorted = ProjectsSort.recent.sorted(model.projects.summaries, words: [:])
+        let matched = sorted.filter { HomeSearch.matches(model.homeSearch, $0.name, $0.series) }
+        return Array(matched.prefix(5))
+    }
+}
+
+/// One recent project under the sidebar's Projects item. A dot sits where
+/// the title starts: grey, or the accent once a word goal that was set has
+/// been reached. The title fades before the time, which keeps a fixed
+/// column so the ages line up.
+private struct RecentProjectRow: View {
+    let summary: ProjectSummary
+    /// Narration words, once the script has been read. Nil until then.
+    let words: Int?
+    let isCurrent: Bool
+    let open: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(dot)
+                    .frame(width: 6, height: 6)
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 16)
+                    .overlay(alignment: .leading) {
+                        Text(summary.name)
+                            .font(.system(size: 12, weight: isCurrent ? .medium : .regular))
+                            .foregroundStyle(isCurrent || hovered ? Palette.textPrimary : Palette.textSecondary)
+                            .fixedSize()
+                    }
+                    .clipped()
+                    .mask { fadeMask }
+                if let age = CompactAge.label(for: summary) {
+                    Text(age)
+                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .foregroundStyle(Palette.textTertiary)
+                        .frame(width: 32, alignment: .trailing)
+                }
+            }
+            .padding(.leading, 40)
+            .padding(.trailing, 10)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(hovered ? Palette.surfaceHover : .clear)
+                    .padding(.horizontal, 6)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            hovered = inside
+            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .help(help)
+    }
+
+    /// Grey, unless this project was given a word goal and the script has
+    /// reached it. The accent is the same one the word-goal ring draws with.
+    private var dot: Color {
+        guard let target = summary.targetWordCount, target > 0, let words, words >= target else {
+            return Color.white.opacity(0.28)
+        }
+        return Palette.accent
+    }
+
+    /// Opaque across the title, then a short fade so a long name disappears
+    /// before the time instead of running into it. A short name never reaches
+    /// the fade.
+    private var fadeMask: some View {
+        HStack(spacing: 0) {
+            Color.black.frame(maxWidth: .infinity)
+            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: 14)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var help: String {
+        guard let date = summary.lastOpened ?? summary.edited else { return summary.name }
+        let verb = summary.lastOpened == nil ? "Edited" : "Opened"
+        let when = date.formatted(.relative(presentation: .named))
+        return "\(summary.name) — \(verb) \(when)"
+    }
+}
+
+/// "14h", "3d" — how long ago a project was last opened, or saved if it
+/// never has been opened here.
+enum CompactAge {
+    static func label(for summary: ProjectSummary, now: Date = Date()) -> String? {
+        guard let date = summary.lastOpened ?? summary.edited else { return nil }
+        return string(since: date, now: now)
+    }
+
+    static func string(since date: Date, now: Date = Date()) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        if seconds < 60 { return "now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h" }
+        let days = hours / 24
+        if days < 7 { return "\(days)d" }
+        let weeks = days / 7
+        if weeks < 5 { return "\(weeks)w" }
+        let months = days / 30
+        if months < 12 { return "\(months)mo" }
+        return "\(max(days / 365, 1))y"
     }
 }
 

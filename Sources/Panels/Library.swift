@@ -21,6 +21,15 @@ final class Library {
     /// not just the one chapter someone happens to click.
     private(set) var remoteDownloadProgress: [String: DownloadProgress] = [:]
 
+    /// A check for new chapters in flight, so a second request for the same
+    /// series waits on the first instead of hitting the site twice.
+    private(set) var remoteRefreshInFlight: Set<String> = []
+    /// What the last check found, long enough to read, then cleared.
+    private(set) var remoteRefreshNotice: [String: RemoteRefreshNotice] = [:]
+
+    @ObservationIgnored private var refreshTasks: [String: Task<RemoteRefreshOutcome, Never>] = [:]
+    @ObservationIgnored private var noticeGeneration: [String: Int] = [:]
+
     struct DownloadProgress: Equatable {
         var done: Int
         var total: Int
@@ -101,50 +110,120 @@ final class Library {
         )
         index.remoteSources.removeAll { $0.url == url }
         index.remoteSources.append(record)
-        let newItems = mergeRemoteSeries(resolved, siteID: siteID, manifestURL: url)
+        let newItems = mergeRemoteSeries(resolved, into: resolved.seriesName, siteID: siteID, manifestURL: url)
         scheduleSave()
         prefetchAllPages(for: newItems, seriesName: resolved.seriesName)
         return resolved.seriesName
     }
 
-    /// Re-checks every web source already added for chapters not seen before.
-    func refreshRemoteSources() async {
-        for record in index.remoteSources {
-            guard let resolved = try? await RemoteComicSource.resolveSeries(from: record.url) else { continue }
-            let newItems = mergeRemoteSeries(resolved, siteID: record.siteID, manifestURL: record.url)
-            prefetchAllPages(for: newItems, seriesName: resolved.seriesName)
-            if let i = index.remoteSources.firstIndex(where: { $0.url == record.url }) {
-                index.remoteSources[i].lastRefreshed = Date()
+    /// How long a saved link can sit before opening its series checks again.
+    static let remoteRefreshStaleInterval: TimeInterval = 24 * 60 * 60
+
+    /// Re-reads one series' saved link and downloads chapters that weren't
+    /// there last time. Chapters already saved are left on disk.
+    func refreshRemoteSeries(named name: String) async -> RemoteRefreshOutcome {
+        if let task = refreshTasks[name] { return await task.value }
+        let task = Task { await performRefresh(named: name) }
+        refreshTasks[name] = task
+        defer { refreshTasks[name] = nil }
+        return await task.value
+    }
+
+    /// The same check, only when the last one is older than a day — or has
+    /// never succeeded. Returns nil for a series that didn't come from a
+    /// link, and nil when the saved check is still fresh, so opening a
+    /// series doesn't talk to the site every time.
+    func refreshRemoteSeriesIfStale(named name: String, now: Date = Date()) async -> RemoteRefreshOutcome? {
+        let records = index.remoteSources.filter { $0.seriesName == name }
+        guard !records.isEmpty else { return nil }
+        let stale = records.contains { record in
+            guard let last = record.lastRefreshed else { return true }
+            return now.timeIntervalSince(last) >= Self.remoteRefreshStaleInterval
+        }
+        guard stale else { return nil }
+        return await refreshRemoteSeries(named: name)
+    }
+
+    func isCheckingForChapters(_ seriesName: String) -> Bool {
+        remoteRefreshInFlight.contains(seriesName)
+    }
+
+    /// Puts the outcome where the shelf and the series page can show it.
+    /// "Up to date" is only worth saying when someone asked — a background
+    /// check that finds nothing should stay quiet.
+    func presentRefreshNotice(for seriesName: String, outcome: RemoteRefreshOutcome, announceUpToDate: Bool) {
+        guard let notice = RemoteRefreshNotice.make(outcome, announceUpToDate: announceUpToDate) else { return }
+        noticeGeneration[seriesName, default: 0] += 1
+        let generation = noticeGeneration[seriesName, default: 0]
+        remoteRefreshNotice[seriesName] = notice
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(notice.kind.lingerSeconds))
+            guard let self, self.noticeGeneration[seriesName] == generation else { return }
+            self.remoteRefreshNotice[seriesName] = nil
+        }
+    }
+
+    private func performRefresh(named name: String) async -> RemoteRefreshOutcome {
+        let records = index.remoteSources.filter { $0.seriesName == name }
+        guard !records.isEmpty else {
+            return .failed("This series didn’t come from a link.")
+        }
+        remoteRefreshInFlight.insert(name)
+        defer { remoteRefreshInFlight.remove(name) }
+
+        var newCount = 0
+        var failures: [String] = []
+        for record in records {
+            do {
+                let resolved = try await RemoteComicSource.resolveSeries(from: record.url)
+                let newItems = mergeRemoteSeries(
+                    resolved, into: record.seriesName, siteID: record.siteID, manifestURL: record.url
+                )
+                newCount += newItems.count
+                if let i = index.remoteSources.firstIndex(where: { $0.url == record.url }) {
+                    index.remoteSources[i].lastRefreshed = Date()
+                }
+                prefetchAllPages(for: newItems, seriesName: record.seriesName)
+            } catch {
+                failures.append(Self.describeRemoteError(error))
             }
         }
         scheduleSave()
+        if newCount > 0 { return .newChapters(newCount) }
+        if let failure = failures.first { return .failed(failure) }
+        return .upToDate
     }
 
     /// `siteID` non-nil means every chapter came from that site adapter;
-    /// nil means the URL was read as a manifest. Returns the chapters that
-    /// weren't already known, so the caller can warm the cache for just
-    /// those rather than re-downloading a series' whole back catalog on
-    /// every refresh.
+    /// nil means the URL was read as a manifest. Chapters land in the
+    /// source's order. Only chapters that weren't already known come back,
+    /// so the caller can download just those.
     @discardableResult
-    private func mergeRemoteSeries(_ resolved: ResolvedSeries, siteID: String?, manifestURL: URL) -> [LibraryItem] {
+    private func mergeRemoteSeries(_ resolved: ResolvedSeries, into seriesName: String, siteID: String?, manifestURL: URL) -> [LibraryItem] {
         let items = resolved.chapters.map { chapter -> LibraryItem in
             let source: ItemSource = siteID.map { .site(site: $0, chapterURL: chapter.chapterURL) }
                 ?? .manifest(manifestURL: manifestURL, chapterKey: chapter.chapterKey)
             return LibraryItem(
-                remote: source, series: resolved.seriesName, volume: chapter.volume,
+                remote: source, series: seriesName, volume: chapter.volume,
                 chapter: chapter.number.map { Int($0) }, title: chapter.title ?? "",
                 arc: nil, displayURL: chapter.chapterURL
             )
         }
-        if let i = index.remoteSeries.firstIndex(where: { $0.name == resolved.seriesName }) {
-            let known = Set(index.remoteSeries[i].items.map(\.id))
-            let newItems = items.filter { !known.contains($0.id) }
-            index.remoteSeries[i].items.append(contentsOf: newItems)
-            return newItems
+        if let i = index.remoteSeries.firstIndex(where: { $0.name == seriesName }) {
+            let merged = RemoteSeriesMerge.merge(existing: index.remoteSeries[i].items, incoming: items)
+            index.remoteSeries[i].items = merged.items
+            return merged.newItems
         } else {
-            index.remoteSeries.append(Series(name: resolved.seriesName, items: items))
+            index.remoteSeries.append(Series(name: seriesName, items: items))
             return items
         }
+    }
+
+    private static func describeRemoteError(_ error: Error) -> String {
+        if let described = error as? LocalizedError, let message = described.errorDescription {
+            return message
+        }
+        return error.localizedDescription
     }
 
     /// How many chapters download at once — each one already fans its own
@@ -217,6 +296,24 @@ final class Library {
         index.remoteSeries.contains { $0.name == series.name }
     }
 
+    func isRemoteItem(_ item: LibraryItem) -> Bool {
+        if case .local = item.source { return false }
+        return true
+    }
+
+    /// Drops one chapter's cached pages so the next download fetches them
+    /// again. Used when a chapter's pages were replaced at the same link.
+    func forgetCachedPages(of item: LibraryItem) {
+        guard let source = Self.chapterSource(for: item.source) else { return }
+        RemoteComicSource.forget(source)
+    }
+
+    /// Downloads one chapter into the cache. The shelf badge shows it the
+    /// same way it shows a new chapter arriving.
+    func downloadChapter(_ item: LibraryItem) {
+        prefetchAllPages(for: [item], seriesName: item.series)
+    }
+
     /// Forgets a series brought in from the web entirely: its entry, the
     /// source URL(s) that fed it, its reading position and progress, its
     /// cached covers, and every chapter's downloaded pages — so adding the
@@ -229,6 +326,8 @@ final class Library {
         index.lastRead[removed.name] = nil
         index.recentSeries.removeAll { $0 == removed.name }
         remoteDownloadProgress[removed.name] = nil
+        remoteRefreshNotice[removed.name] = nil
+        remoteRefreshInFlight.remove(removed.name)
         for item in removed.items {
             index.positions[item.id] = nil
             index.spreadCounts[item.id] = nil
@@ -383,6 +482,44 @@ final class Library {
         saveTask?.cancel()
         saveTask = nil
         try? LibraryStore.save(index, to: folder)
+    }
+}
+
+/// What a check for new chapters found.
+enum RemoteRefreshOutcome: Equatable {
+    case newChapters(Int)
+    case upToDate
+    case failed(String)
+}
+
+/// A line under a series' name after a check, or while explaining a failure.
+struct RemoteRefreshNotice: Equatable {
+    enum Kind: Equatable {
+        case newChapters, upToDate, failed
+
+        var lingerSeconds: Double {
+            switch self {
+            case .newChapters: return 6
+            case .upToDate: return 3
+            case .failed: return 8
+            }
+        }
+    }
+
+    var message: String
+    var kind: Kind
+
+    static func make(_ outcome: RemoteRefreshOutcome, announceUpToDate: Bool) -> RemoteRefreshNotice? {
+        switch outcome {
+        case .newChapters(let count):
+            let message = count == 1 ? "1 new chapter" : "\(count) new chapters"
+            return RemoteRefreshNotice(message: message, kind: .newChapters)
+        case .upToDate:
+            guard announceUpToDate else { return nil }
+            return RemoteRefreshNotice(message: "Up to date", kind: .upToDate)
+        case .failed(let reason):
+            return RemoteRefreshNotice(message: "Couldn’t check for new chapters. \(reason)", kind: .failed)
+        }
     }
 }
 

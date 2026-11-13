@@ -27,21 +27,26 @@ struct SpreadStrip: NSViewRepresentable {
     /// A plain click on a page — not a drag, not a swipe.
     let onTap: () -> Void
 
-    func makeNSView(context: Context) -> SpreadStripView {
-        let strip = SpreadStripView()
-        strip.onInteraction = onInteraction
-        strip.onTap = onTap
-        strip.highlights = highlights
-        strip.focus = focus
-        strip.panelsProvider = panelsProvider
-        strip.onCapture = onCapture
-        strip.onEndCapture = onEndCapture
-        strip.isCapturing = isCapturing
-        strip.synchronise(with: model)
-        return strip
+    func makeNSView(context: Context) -> StripHost {
+        let host = StripHost()
+        // Don't pull the canvas off the host still on screen. This one claims
+        // it once it is in the window — see `viewDidMoveToWindow`.
+        configure(host.strip)
+        return host
     }
 
-    func updateNSView(_ strip: SpreadStripView, context: Context) {
+    func updateNSView(_ host: StripHost, context: Context) {
+        if host.window != nil { host.claimCanvas() }
+        configure(host.strip)
+    }
+
+    static func dismantleNSView(_ host: StripHost, coordinator: ()) {
+        // A replacement host may already have taken the canvas. Pulling it
+        // off that host is what flashes the black background.
+        host.releaseCanvasIfStillHeld()
+    }
+
+    private func configure(_ strip: SpreadStripView) {
         strip.onInteraction = onInteraction
         strip.onTap = onTap
         strip.highlights = highlights
@@ -51,6 +56,63 @@ struct SpreadStrip: NSViewRepresentable {
         strip.onEndCapture = onEndCapture
         strip.isCapturing = isCapturing
         strip.synchronise(with: model)
+    }
+}
+
+/// Holds the one page canvas. SwiftUI's split view — the script pane beside
+/// the pages — can destroy and recreate this representable whenever the pane
+/// publishes. The canvas stays, so the pages already drawn aren't thrown out
+/// and decoded again, which is a black frame and then the new page.
+final class StripHost: NSView {
+    static let canvas = SpreadStripView()
+    private static var nextGeneration = 0
+    let strip = StripHost.canvas
+    /// Later hosts win when two overlap during a SwiftUI rebuild, so the one
+    /// on its way out can't pull the pages back and then drop them.
+    private let generation: Int
+
+    override init(frame frameRect: NSRect) {
+        StripHost.nextGeneration += 1
+        generation = StripHost.nextGeneration
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+        clipsToBounds = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Moves the canvas here. A newer host that's already on screen keeps it.
+    /// Empty bounds are ignored so a host that hasn't been laid out yet can't
+    /// collapse the pages down to nothing while it takes them.
+    func claimCanvas() {
+        guard window != nil, bounds.width > 1, bounds.height > 1 else { return }
+        if let owner = strip.superview as? StripHost,
+           owner !== self, owner.window != nil, owner.generation > generation {
+            return
+        }
+        if strip.superview !== self {
+            strip.removeFromSuperview()
+            addSubview(strip)
+        }
+        if strip.frame != bounds { strip.frame = bounds }
+    }
+
+    func releaseCanvasIfStillHeld() {
+        guard strip.superview === self else { return }
+        strip.removeFromSuperview()
+    }
+
+    override func layout() {
+        super.layout()
+        claimCanvas()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { claimCanvas() }
     }
 }
 
@@ -99,6 +161,10 @@ final class SpreadStripView: NSView {
 
     private weak var model: ReaderModel?
     private var builtDirection: ReadingDirection?
+    /// The comic these panels were built from. The canvas outlives the
+    /// SwiftUI view that hosts it, so a newly opened book has to be told
+    /// apart from the one still on screen — same spread index, different pages.
+    private var builtPages: [URL]?
     private var isSwiping = false
     /// Zoom callbacks can arrive while panels are being placed. Ignore them;
     /// the placement already uses the current widths.
@@ -146,9 +212,10 @@ final class SpreadStripView: NSView {
             return
         }
 
-        // Flipping direction re-orders the pages inside every spread and swaps
-        // which neighbour is on which side, so nothing on screen survives it.
-        guard builtDirection == model.direction else {
+        // A different comic, or a flipped reading direction, re-orders every
+        // page. Nothing on screen survives it. The page list is compared, not
+        // just the direction, because this canvas is reused across books.
+        guard builtPages == model.pages, builtDirection == model.direction else {
             rebuild(at: model.spreadIndex, in: model)
             return
         }
@@ -159,13 +226,37 @@ final class SpreadStripView: NSView {
             return
         }
 
-        // A turn arriving mid-slide collapses the one in flight rather than
-        // queueing behind it, so a held-down arrow key can't build a backlog.
-        if isAnimating { finishSlideNow() }
+        // Already sliding or fading toward this exact spread. Let it finish.
+        // The script pane publishes on its own while a turn is in flight
+        // (a range growing, the word count, layout), and SwiftUI delivers
+        // that as another update of this view. Resolving the turn here
+        // promotes the centre and then falls through to `rebuild`, which
+        // tears the visible page down to the black background and builds a
+        // cold one in its place — the flash.
+        if isAnimating, isHeading(to: target, in: model) {
+            return
+        }
+
+        // A different turn arriving mid-slide collapses the one in flight
+        // rather than queueing behind it, so a held-down arrow key can't
+        // build a backlog. Collapsing lands on that turn's own target, which
+        // may already be the one now requested.
+        if isAnimating {
+            finishSlideNow()
+            finishCrossfadeNow()
+        }
+        if let centre = centrePanel, centre.isShowing(spreadAt: target, in: model) {
+            ensureNeighbourPanels()
+            return
+        }
+
+        // The gesture owns the strip until it commits. Rebuilding would drop
+        // the page the reader is dragging.
+        if isSwiping { return }
 
         // One step away means it can be slid to; anything further (Home, End,
         // a restored reading position) just snaps.
-        if !isSwiping, let centre = centrePanel {
+        if let centre = centrePanel {
             for side in [ScreenSide.left, .right]
             where neighbouringSpread(from: centre.spreadIndex, on: side,
                                      direction: model.direction,
@@ -176,6 +267,20 @@ final class SpreadStripView: NSView {
         }
 
         rebuild(at: target, in: model)
+    }
+
+    /// Whether the turn in flight is revealing `target`. The centre still
+    /// shows the outgoing spread until the animation promotes it.
+    private func isHeading(to target: Int, in model: ReaderModel) -> Bool {
+        guard let centre = centrePanel else { return false }
+        for side in [ScreenSide.left, .right] {
+            if neighbouringSpread(from: centre.spreadIndex, on: side,
+                                  direction: model.direction,
+                                  spreadCount: model.spreads.count) == target {
+                return true
+            }
+        }
+        return false
     }
 
     private func teardown() {
@@ -192,12 +297,14 @@ final class SpreadStripView: NSView {
         centrePanel = nil
         rightPanel = nil
         builtDirection = nil
+        builtPages = nil
         offset = 0
     }
 
     private func rebuild(at index: Int, in model: ReaderModel) {
         teardown()
         builtDirection = model.direction
+        builtPages = model.pages
         centrePanel = makePanel(forSpreadAt: index, in: model)
         ensureNeighbourPanels()
     }
@@ -268,6 +375,11 @@ final class SpreadStripView: NSView {
             guard panel.superview === self, panel.pageURLs == urls, !images.isEmpty else { return }
             panel.show(images)
             positionPanels()
+            // A turn may be waiting on this decode. Now that there's something
+            // to draw, catch up — a no-op when the strip is already there.
+            if let model = self.model {
+                synchronise(with: model)
+            }
         }
     }
 
@@ -473,6 +585,10 @@ final class SpreadStripView: NSView {
             rebuild(at: model.spreadIndex, in: model)
             return
         }
+        // Stay on the page that's already up until the incoming one can be
+        // drawn. `loadImages` calls back into `synchronise` when it lands, and
+        // that starts the turn. Sliding now would uncover the black background.
+        guard incoming.isReady else { return }
         if model.pageLayout == .singlePage {
             crossfade(revealing: side, incoming: incoming)
             return

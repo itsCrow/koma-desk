@@ -106,7 +106,7 @@ struct ReaderView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.88), value: model.isFocusedWriting)
         // Height follows from the spread's shape; only the width needs a floor.
         .frame(minWidth: 640, minHeight: 300)
-        .navigationTitle(model.title ?? "Panels")
+        .navigationTitle(model.title ?? "Koma Desk")
         .hiddenToolbarBackground()
         // The app's own accent for SwiftUI's controls, not the user's system
         // accent — see `Palette.accent`.
@@ -249,7 +249,7 @@ struct ReaderView: View {
             overlays
         }
         .background(WindowConfigurator(
-            spreadAspect: model.spreadAspect,
+            spreadAspect: model.windowAspect,
             layoutKey: (model.hasContents && model.showsContents ? "contents+" : "")
                 + (model.project != nil && model.showsScript ? "script-\(model.scriptPlacement.rawValue)" : "pages")
         ))

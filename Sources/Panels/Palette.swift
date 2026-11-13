@@ -259,3 +259,41 @@ struct PrimaryButtonStyle: ButtonStyle {
         }
     }
 }
+
+/// A secondary action beside a primary one — New Project, Update. Text and
+/// an icon, with a capsule only while the pointer is over it, so it doesn't
+/// compete with the white button.
+struct QuietButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        QuietButtonBody(configuration: configuration, isEnabled: isEnabled)
+    }
+
+    private struct QuietButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        let isEnabled: Bool
+        @State private var hovered = false
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.white.opacity(foreground))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Color.white.opacity(fill)))
+                .contentShape(Capsule())
+                .animation(.easeOut(duration: 0.15), value: hovered)
+                .onHover { hovered = $0 }
+        }
+
+        private var foreground: Double {
+            guard isEnabled else { return 0.38 }
+            return hovered ? 0.92 : 0.62
+        }
+
+        private var fill: Double {
+            hovered && isEnabled ? 0.08 : 0
+        }
+    }
+}
