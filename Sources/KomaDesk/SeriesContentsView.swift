@@ -111,6 +111,7 @@ struct SeriesContentsView: View {
             Text(series.summary)
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
         }
         if switchable.inProject.isEmpty && switchable.others.isEmpty {
             label
@@ -123,8 +124,11 @@ struct SeriesContentsView: View {
             .menuStyle(.button)
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Switch to another series at the same chapter and page")
+            // Only as tall as it needs, but no wider than the sidebar allows:
+            // a long series name truncates instead of pushing the header out.
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help("\(series.name) — switch to another series at the same chapter and page")
         }
     }
 }
