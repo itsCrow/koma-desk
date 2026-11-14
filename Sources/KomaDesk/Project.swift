@@ -238,6 +238,36 @@ final class Project {
         citation.captureFile.map { capturesFolder.appendingPathComponent($0) }
     }
 
+    /// A shot's image under the name it's handed over with, numbered by its
+    /// place in the script — nil when it has no capture on disk.
+    func shotImage(number: Int, citation: Citation) -> (name: String, source: URL)? {
+        guard let source = captureURL(for: citation),
+              FileManager.default.fileExists(atPath: source.path) else { return nil }
+        let stem = source.deletingPathExtension().lastPathComponent.replacingOccurrences(of: " ", with: "_")
+        return (String(format: "%02d", number) + "_\(stem).\(source.pathExtension)", source)
+    }
+
+    /// Every shot with a capture, in script order. A shot without one keeps
+    /// its number, so the numbers match the shot list's.
+    var shotImages: [(name: String, source: URL)] {
+        citationsInScriptOrder.enumerated().compactMap { shotImage(number: $0.offset + 1, citation: $0.element) }
+    }
+
+    /// Copies the shot images into `folder`, replacing files of the same name.
+    /// Returns how many were written.
+    @discardableResult
+    func writeShotImages(to folder: URL) throws -> Int {
+        let manager = FileManager.default
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        let images = shotImages
+        for image in images {
+            let destination = folder.appendingPathComponent(image.name)
+            try? manager.removeItem(at: destination)
+            try manager.copyItem(at: image.source, to: destination)
+        }
+        return images.count
+    }
+
     /// The script with chips as plain text, for pasting somewhere else. Each
     /// block of writing keeps its page range, so the ranges survive the trip
     /// into Google Docs.

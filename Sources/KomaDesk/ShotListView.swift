@@ -35,6 +35,7 @@ struct ScriptPaneView: View {
             .background(ScriptStyle.backgroundColor)
             .overlay(alignment: .trailing) {
                 HStack(spacing: 2) {
+                    saveImagesButton
                     modeMenu
                     focusButton
                 }
@@ -132,6 +133,19 @@ struct ScriptPaneView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Switch between writing, voice, and editor modes")
+    }
+
+    private var saveImagesButton: some View {
+        let enabled = model.hasShotImages
+        return Button { model.saveShotImages() } label: {
+            Image(systemName: "square.and.arrow.down")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(enabled ? 0.5 : 0.2))
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .help(enabled ? "Save the shot images to a folder" : "No captured shots to save yet")
     }
 
     private var focusButton: some View {

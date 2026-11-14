@@ -1204,14 +1204,11 @@ final class ReaderModel {
                 for (shotNumber, citation) in group.shots {
                     let number = String(format: "%02d", shotNumber)
                     var filename = "\(number)_(no capture)"
-                    if let source = project.captureURL(for: citation),
-                       FileManager.default.fileExists(atPath: source.path) {
-                        let stem = source.deletingPathExtension().lastPathComponent
-                            .replacingOccurrences(of: " ", with: "_")
-                        filename = "\(number)_\(stem).\(source.pathExtension)"
+                    if let image = project.shotImage(number: shotNumber, citation: citation) {
+                        filename = image.name
                         let destination = folder.appendingPathComponent(filename)
                         try? FileManager.default.removeItem(at: destination)
-                        try FileManager.default.copyItem(at: source, to: destination)
+                        try FileManager.default.copyItem(at: image.source, to: destination)
                     }
                     lines.append("\(number). \(citation.text)")
                     lines.append("    \(filename)")
@@ -1252,6 +1249,33 @@ final class ReaderModel {
                 : "Exported \(shots.count) shots and \(notes.count) note\(notes.count == 1 ? "" : "s")"
         } catch {
             errorMessage = "Couldn’t export the shots. \(error.localizedDescription)"
+        }
+    }
+
+    /// Whether any shot in the script has a captured image to save.
+    var hasShotImages: Bool {
+        project.map { !$0.shotImages.isEmpty } ?? false
+    }
+
+    /// Just the shot images, numbered in script order, into a folder of the
+    /// writer's choosing — no list beside them.
+    func saveShotImages() {
+        guard let project else { return }
+        guard !project.shotImages.isEmpty else {
+            errorMessage = "There are no captured shots in the script yet."
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "Save Shot Images"
+        panel.nameFieldStringValue = "\(project.name) Shots"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        do {
+            let count = try project.writeShotImages(to: folder)
+            NSWorkspace.shared.activateFileViewerSelecting([folder])
+            lastCaptureMessage = "Saved \(count) shot image\(count == 1 ? "" : "s")"
+        } catch {
+            errorMessage = "Couldn’t save the shot images. \(error.localizedDescription)"
         }
     }
 

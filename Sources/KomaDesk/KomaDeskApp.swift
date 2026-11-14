@@ -114,6 +114,8 @@ struct KomaDeskApp: App {
                     .disabled(model.project == nil)
                 Button("Export Shots…") { model.exportShots() }
                     .disabled(model.project == nil)
+                Button("Save Shot Images…") { model.saveShotImages() }
+                    .disabled(!model.hasShotImages)
                 Button("Clean Up Unused Captures") { model.cleanUpUnusedCaptures() }
                     .disabled(model.project == nil)
                 Button("Reveal Project in Finder") { model.revealProject() }

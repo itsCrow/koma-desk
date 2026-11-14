@@ -1837,6 +1837,27 @@ struct ReaderProjectTests {
         #expect(!writer.loadManifest().contains { $0.file == droppedFile })
     }
 
+    @Test("Saving shot images writes just the captured images, numbered in script order")
+    func saveShotImages() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let project = try scratch.project(named: "Save", series: "B")
+        for name in ["first panel.png", "second.png"] {
+            try Data(repeating: 1, count: 16).write(to: project.capturesFolder.appendingPathComponent(name))
+        }
+        let first = Citation(itemID: "b|1", pageIndex: 0, pageNumbers: [1], captureFile: "first panel.png", text: "first")
+        let second = Citation(itemID: "b|1", pageIndex: 1, pageNumbers: [2], captureFile: "second.png", text: "second")
+        let gone = Citation(itemID: "b|1", pageIndex: 2, pageNumbers: [3], captureFile: "gone.png", text: "gone")
+        project.manifest.citations = [gone, second, first]
+        project.script = "[second](panels://cite/\(second.id)) then [first](panels://cite/\(first.id)), "
+            + "then [gone](panels://cite/\(gone.id))."
+
+        let folder = project.url.deletingLastPathComponent().appendingPathComponent("Save Shots", isDirectory: true)
+        #expect(try project.writeShotImages(to: folder) == 2)
+        let saved = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        #expect(saved == ["01_second.png", "02_first_panel.png"])
+    }
+
     @Test("Removing one citation trashes its capture, but not one still cited")
     func removeOne() throws {
         let scratch = try Scratch()
