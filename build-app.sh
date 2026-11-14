@@ -1,6 +1,5 @@
 #!/bin/bash
 # Assembles a double-clickable Koma Desk.app from the SwiftPM build product.
-# Named apart from the commercial Panels app in /Applications.
 set -euo pipefail
 
 cd "$(dirname "$0")"
