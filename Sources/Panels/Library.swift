@@ -57,7 +57,7 @@ final class Library {
         Task.detached(priority: .utility) { [weak self] in
             for series in remote {
                 let lacking = series.items.filter { item in
-                    Self.chapterSource(for: item.source).map { !RemoteComicSource.isComplete($0) } ?? false
+                    Self.chapterSource(for: item.source).map { RemoteComicSource.cacheState($0) != .complete } ?? false
                 }
                 guard !lacking.isEmpty else { continue }
                 // One series at a time: every series at once is more
@@ -273,28 +273,76 @@ final class Library {
     /// it's actually happening.
     @discardableResult
     private func prefetchAllPages(for items: [LibraryItem], seriesName: String, retryingIncomplete: Bool = false) -> Task<Void, Never>? {
-        let sources = items.compactMap { Self.chapterSource(for: $0.source) }
-        guard !sources.isEmpty else { return nil }
-        remoteDownloadProgress[seriesName] = DownloadProgress(done: 0, total: sources.count)
+        let chapters = items.compactMap { item in Self.chapterSource(for: item.source).map { (id: item.id, source: $0) } }
+        guard !chapters.isEmpty else { return nil }
+        remoteDownloadProgress[seriesName] = DownloadProgress(done: 0, total: chapters.count)
         return Task.detached(priority: .utility) { [weak self] in
             var completed = 0
-            await withTaskGroup(of: Void.self) { group in
+            await withTaskGroup(of: (String, RemoteComicSource.CacheState).self) { group in
                 var next = 0
-                func startNext() {
-                    guard next < sources.count else { return }
-                    let source = sources[next]
+                func startNext() async {
+                    guard next < chapters.count else { return }
+                    let chapter = chapters[next]
                     next += 1
-                    group.addTask { _ = try? await RemoteComicSource.open(source, retryingIncomplete: retryingIncomplete) }
+                    await self?.noteChapterDownloading(chapter.id)
+                    group.addTask {
+                        _ = try? await RemoteComicSource.open(chapter.source, retryingIncomplete: retryingIncomplete)
+                        return (chapter.id, RemoteComicSource.cacheState(chapter.source))
+                    }
                 }
-                for _ in 0..<min(Self.maxConcurrentChapterPrefetches, sources.count) { startNext() }
-                while await group.next() != nil {
+                for _ in 0..<min(Self.maxConcurrentChapterPrefetches, chapters.count) { await startNext() }
+                while let (id, state) = await group.next() {
                     completed += 1
                     let done = completed
-                    await self?.noteDownloadProgress(seriesName: seriesName, done: done, total: sources.count)
-                    startNext()
+                    await self?.noteChapterDownloaded(id, state: state)
+                    await self?.noteDownloadProgress(seriesName: seriesName, done: done, total: chapters.count)
+                    await startNext()
                 }
             }
         }
+    }
+
+    // MARK: - What's saved of each chapter
+
+    /// What's on disk of each web chapter, by item id. Filled in a series
+    /// at a time as its page is looked at, and kept up as chapters download.
+    private(set) var chapterStates: [String: RemoteComicSource.CacheState] = [:]
+    /// Web chapters downloading right now, by item id.
+    private(set) var downloadingChapters: Set<String> = []
+
+    /// Works out what's saved of every chapter in a web series. Off the main
+    /// thread: it looks at every page file of every chapter.
+    func loadChapterStates(for series: Series) async {
+        guard isRemoteSeries(series) else { return }
+        let chapters = series.items.compactMap { item in Self.chapterSource(for: item.source).map { (id: item.id, source: $0) } }
+        let states = await Task.detached(priority: .userInitiated) {
+            Dictionary(chapters.map { ($0.id, RemoteComicSource.cacheState($0.source)) }, uniquingKeysWith: { a, _ in a })
+        }.value
+        chapterStates.merge(states) { _, new in new }
+    }
+
+    /// How many of a web series' chapters are saved with every page; nil
+    /// for a series from a folder, or one whose page hasn't been looked at.
+    func downloadedCount(in series: Series) -> (saved: Int, total: Int)? {
+        guard isRemoteSeries(series) else { return nil }
+        let states = series.items.compactMap { chapterStates[$0.id] }
+        guard states.count == series.items.count else { return nil }
+        return (states.filter { $0 == .complete }.count, series.items.count)
+    }
+
+    /// Reading a chapter that wasn't saved downloads it; the list should say so.
+    func noteChapterOpened(_ item: LibraryItem) {
+        guard let source = Self.chapterSource(for: item.source) else { return }
+        chapterStates[item.id] = RemoteComicSource.cacheState(source)
+    }
+
+    private func noteChapterDownloading(_ id: String) {
+        downloadingChapters.insert(id)
+    }
+
+    private func noteChapterDownloaded(_ id: String, state: RemoteComicSource.CacheState) {
+        downloadingChapters.remove(id)
+        chapterStates[id] = state
     }
 
     /// Records one chapter finishing (or failing — either way it's off the
@@ -327,6 +375,7 @@ final class Library {
     func forgetCachedPages(of item: LibraryItem) {
         guard let source = Self.chapterSource(for: item.source) else { return }
         RemoteComicSource.forget(source)
+        chapterStates[item.id] = .missing
     }
 
     /// Downloads one chapter into the cache. The shelf badge shows it the

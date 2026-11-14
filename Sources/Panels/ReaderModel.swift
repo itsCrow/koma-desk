@@ -457,6 +457,7 @@ final class ReaderModel {
             let comic = try await RemoteComicSource.open(source) { [weak self] done, total in
                 Task { @MainActor in self?.remoteFetchProgress = (done, total) }
             }
+            library.noteChapterOpened(item)
             let sizes = comic.pages.map(pagePixelSize)
             return .success(OpenedComic(
                 source: item.url, pages: comic.pages, identity: comic.identity, warning: comic.warning,

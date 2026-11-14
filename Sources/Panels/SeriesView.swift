@@ -40,6 +40,7 @@ struct SeriesView: View {
             let opened = series
             Task { await model.refreshSeriesIfStale(opened) }
         }
+        .task(id: series.name) { await model.library.loadChapterStates(for: series) }
     }
 
     // MARK: - Contents
@@ -110,6 +111,13 @@ private struct SeriesHero: View {
                     .font(Typography.heading)
                     .foregroundStyle(Palette.textSecondary)
                     .padding(.top, 4)
+                if let count = library.downloadedCount(in: series), count.saved < count.total {
+                    Label("\(count.saved.formatted()) of \(count.total.formatted()) chapters downloaded",
+                          systemImage: "icloud.and.arrow.down")
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.textTertiary)
+                        .padding(.top, 6)
+                }
                 if let download = model.library.remoteDownloadProgress[series.name] {
                     DownloadProgressBadge(progress: download)
                         .padding(.top, 8)
@@ -224,6 +232,7 @@ private struct ItemRow: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
+                downloadMark
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
@@ -242,6 +251,33 @@ private struct ItemRow: View {
         ) {
             model.redownloadChapter(item)
         })
+    }
+
+    /// Only web chapters can be missing from disk; a saved one shows
+    /// nothing, so a fully downloaded series reads as a plain list.
+    @ViewBuilder
+    private var downloadMark: some View {
+        let library = model.library
+        if library.downloadingChapters.contains(item.id) || (model.isLoading && model.item?.id == item.id && library.isRemoteItem(item)) {
+            ProgressView()
+                .controlSize(.mini)
+                .help("Downloading")
+        } else {
+            switch library.chapterStates[item.id] {
+            case .missing:
+                Image(systemName: "icloud.and.arrow.down")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.textTertiary)
+                    .help("Not downloaded yet. It downloads when you open it.")
+            case .incomplete:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: Palette.searchHit))
+                    .help("Some pages couldn’t be downloaded. Right-click to download it again.")
+            case .complete, nil:
+                EmptyView()
+            }
+        }
     }
 
     @ViewBuilder

@@ -260,13 +260,21 @@ public enum RemoteComicSource {
         return RemoteComic(source: source, identity: identity, pages: pages, warning: manifest.warning)
     }
 
-    /// Whether a chapter is saved with every page, without downloading:
-    /// false when it's not saved, or saved with pages missing.
-    public static func isComplete(_ source: ChapterSource) -> Bool {
+    /// Whether a chapter's pages are on disk.
+    public enum CacheState: Sendable, Equatable {
+        /// Not saved, or a saved page has since gone.
+        case missing
+        case complete
+        /// Saved, but some pages couldn't be downloaded.
+        case incomplete
+    }
+
+    /// What's saved of a chapter, without downloading anything.
+    public static func cacheState(_ source: ChapterSource) -> CacheState {
         let identity = cacheKey(for: source)
         let directory = cacheRoot.appendingPathComponent(identity, isDirectory: true)
-        guard let cached = loadManifest(in: directory, source: source, identity: identity) else { return false }
-        return cached.warning == nil
+        guard let cached = loadManifest(in: directory, source: source, identity: identity) else { return .missing }
+        return cached.warning == nil ? .complete : .incomplete
     }
 
     private static func saveManifest(_ manifest: Manifest, in directory: URL) {

@@ -108,6 +108,33 @@ struct ManifestSourceTests {
         #expect(comic.warning != nil)
     }
 
+    @Test("What's saved of a chapter: missing, complete, incomplete, and missing again when a page goes")
+    func cacheState() async throws {
+        let manifestURL = URL(string: "https://example.com/state-manifest.json")!
+        let page1 = URL(string: "https://example.com/state/001.jpg")!
+        let page2 = URL(string: "https://example.com/state/002.jpg")!
+        let json = """
+        { "formatVersion": 1, "title": "State", "chapters": [
+            { "id": "1", "pages": ["\(page1.absoluteString)", "\(page2.absoluteString)"] },
+            { "id": "2", "pages": ["\(page1.absoluteString)", "\(page2.absoluteString)"] }
+        ] }
+        """
+        let full = ChapterSource.manifest(manifestURL: manifestURL, chapterKey: "1")
+        let partial = ChapterSource.manifest(manifestURL: manifestURL, chapterKey: "2")
+        #expect(RemoteComicSource.cacheState(full) == .missing)
+
+        RemoteComicSource.fetcher = FakeFetcher(responses: [manifestURL: Data(json.utf8), page1: Data([0xAA]), page2: Data([0xBB])])
+        let comic = try await RemoteComicSource.open(full)
+        #expect(RemoteComicSource.cacheState(full) == .complete)
+
+        RemoteComicSource.fetcher = FakeFetcher(responses: [manifestURL: Data(json.utf8), page1: Data([0xAA])], failing: [page2])
+        _ = try await RemoteComicSource.open(partial)
+        #expect(RemoteComicSource.cacheState(partial) == .incomplete)
+
+        try FileManager.default.removeItem(at: comic.pages[1])
+        #expect(RemoteComicSource.cacheState(full) == .missing)
+    }
+
     @Test("A chapter no longer in the manifest fails clearly")
     func missingChapterFails() async throws {
         RemoteComicSource.fetcher = FakeFetcher(responses: [manifestURL: manifestJSON()])
