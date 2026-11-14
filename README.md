@@ -6,7 +6,7 @@ Requires macOS 14 or later.
 
 ## Download
 
-Grab [KomaDesk-1.1.zip](https://github.com/itsCrow/koma-desk/releases/download/v1.1/KomaDesk-1.1.zip). Unzip it and move **Koma Desk** to Applications.
+Grab [KomaDesk-1.1.1.zip](https://github.com/itsCrow/koma-desk/releases/download/v1.1.1/KomaDesk-1.1.1.zip). Unzip it and move **Koma Desk** to Applications.
 
 macOS blocks the app the first time you open it, because this build is not notarized:
 
@@ -26,7 +26,7 @@ cd koma-desk
 ./build-app.sh
 ```
 
-The script builds a release app at `build/Koma Desk.app` and writes `build/KomaDesk-1.1.zip` next to it. Open the app with:
+The script builds a release app at `build/Koma Desk.app` and writes `build/KomaDesk-1.1.1.zip` next to it. Open the app with:
 
 ```sh
 open "build/Koma Desk.app"
