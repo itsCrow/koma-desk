@@ -8,7 +8,9 @@ APP="build/Koma Desk.app"
 CONTENTS="$APP/Contents"
 
 echo "==> Building release binary"
-swift build -c release
+# Source paths end up in the binary; keep the builder's home folder out of it.
+swift build -c release -Xswiftc -file-prefix-map -Xswiftc "$PWD=." -Xcc "-ffile-prefix-map=$PWD=." \
+    -Xlinker -oso_prefix -Xlinker "$PWD"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
