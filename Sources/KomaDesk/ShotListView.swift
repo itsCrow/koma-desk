@@ -1,5 +1,5 @@
 import SwiftUI
-import PanelsProject
+import KomaProject
 
 /// The script pane: the writing, or (shown a different way — see the
 /// Reader menu's "Show Shot List") the list of shots it adds up to.

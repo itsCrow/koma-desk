@@ -1,6 +1,6 @@
 import SwiftUI
 import ComicLibrary
-import PanelsProject
+import KomaProject
 
 /// "Link to Page…" waiting on an answer: the writing it's for, or the range
 /// whose pages are being changed, and what the sheet starts out showing.

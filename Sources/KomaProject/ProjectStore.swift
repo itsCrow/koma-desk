@@ -1,5 +1,5 @@
 import Foundation
-import PanelsFormat
+import KomaFormat
 
 /// Why a project on disk couldn't be read.
 public enum ProjectError: LocalizedError, Equatable {
@@ -20,7 +20,16 @@ public enum ProjectError: LocalizedError, Equatable {
 /// A project on disk: a folder holding the script, the manifest and the
 /// captures. Finder shows it as one file.
 public enum ProjectStore {
-    public static let packageExtension = "panelsproject"
+    public static let packageExtension = "komadesk"
+    /// What projects were called before the app was Koma Desk. Still opened,
+    /// so one sent from an older copy, or left outside the projects folder,
+    /// isn't stranded.
+    public static let legacyPackageExtension = "panelsproject"
+
+    /// Whether `url` is named like a project, old name or new.
+    public static func isProjectURL(_ url: URL) -> Bool {
+        [packageExtension, legacyPackageExtension].contains(url.pathExtension.lowercased())
+    }
 
     public struct Loaded: Equatable, Sendable {
         public var manifest: ProjectManifest
@@ -42,7 +51,7 @@ public enum ProjectStore {
             at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
         ) else { return [] }
         return entries.filter {
-            $0.pathExtension == packageExtension
+            isProjectURL($0)
                 && (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
                 && FileManager.default.fileExists(atPath: manifestURL(of: $0).path)
         }
@@ -69,7 +78,7 @@ public enum ProjectStore {
     }
 
     /// A place for a new project called `name` inside `root` that isn't taken:
-    /// "Name.panelsproject", then "Name 2.panelsproject", and so on. Characters
+    /// "Name.komadesk", then "Name 2.komadesk", and so on. Characters
     /// a folder can't be called are dropped.
     public static func uniqueURL(named name: String, in root: URL) -> URL {
         // A project folder is shared, so it has to be a name Windows will take
@@ -92,7 +101,7 @@ public enum ProjectStore {
     }
 
     /// Makes a new, empty project about `series` at `url` (which should end
-    /// in `.panelsproject`).
+    /// in `.komadesk`).
     public static func create(at url: URL, name: String, series: [String], targetWordCount: Int? = nil) throws -> Loaded {
         try FileManager.default.createDirectory(at: capturesFolder(of: url), withIntermediateDirectories: true)
         let loaded = Loaded(manifest: ProjectManifest(name: name, series: series, targetWordCount: targetWordCount), script: "")

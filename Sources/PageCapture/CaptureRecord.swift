@@ -1,5 +1,5 @@
 import Foundation
-import PanelsFormat
+import KomaFormat
 
 /// One thing captured for the editor: what it is, where it came from, and
 /// where it went. Kept in `captures.json` beside the files, so a script's

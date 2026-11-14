@@ -9,7 +9,7 @@ public struct TextIndexStore: Sendable {
     public static var defaultDirectory: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return support.appendingPathComponent("PanelsMVP/TextIndex", isDirectory: true)
+        return support.appendingPathComponent("KomaDesk/TextIndex", isDirectory: true)
     }
 
     public let directory: URL

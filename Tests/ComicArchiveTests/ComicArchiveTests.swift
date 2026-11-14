@@ -329,7 +329,7 @@ struct PruneTests {
     @Test("A missing cache directory is not an error")
     func missingRoot() {
         let absent = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-absent-\(UUID().uuidString)")
+            .appendingPathComponent("KomaDeskTests-absent-\(UUID().uuidString)")
         ComicArchive.pruneCache(in: absent, budget: 1024)
     }
 }
@@ -368,7 +368,7 @@ struct OpenTests {
 
     static func makeScratch() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -617,7 +617,7 @@ struct IdentityTests {
 struct ComicFolderTests {
     static func makeTree() throws -> URL {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-series-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-series-\(UUID().uuidString)", isDirectory: true)
         let files = [
             "02 Turtle School Training Arc/Chapter 024 - Training Fee.cbr",
             "02 Turtle School Training Arc/Chapter 031 - Severe Training.cbr",

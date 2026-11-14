@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import PanelsProject
+import KomaProject
 
 /// Every beat, always listed — an editor reviewing a long script needs to
 /// keep their place even in the beats they've already dealt with, so

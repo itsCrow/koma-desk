@@ -7,11 +7,11 @@
 	<key>CFBundleDisplayName</key>
 	<string>Koma Desk</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.mida.PanelsMVP</string>
+	<string>com.mida.KomaDesk</string>
 	<key>CFBundleExecutable</key>
 	<string>Koma Desk</string>
 	<key>CFBundleIconFile</key>
-	<string>Panels</string>
+	<string>KomaDesk</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -33,7 +33,7 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>Panels Project</string>
+			<string>Koma Desk Project</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
@@ -42,6 +42,7 @@
 			<true/>
 			<key>LSItemContentTypes</key>
 			<array>
+				<string>com.mida.komadesk.project</string>
 				<string>com.mida.panels.project</string>
 			</array>
 		</dict>
@@ -56,7 +57,7 @@
 			<array>
 				<string>cx.c3.cbr-archive</string>
 				<string>cx.c3.cbz-archive</string>
-				<string>com.mida.panels.cb7-archive</string>
+				<string>com.mida.komadesk.cb7-archive</string>
 			</array>
 		</dict>
 	</array>
@@ -66,9 +67,33 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
+			<string>com.mida.komadesk.project</string>
+			<key>UTTypeDescription</key>
+			<string>Koma Desk Project</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>komadesk</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+
+	<!-- .cbr / .cbz aren't system-declared types, so Koma Desk imports the
+	     identifiers other comic readers already use. -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<!-- Projects from before the app was Koma Desk. -->
+		<dict>
+			<key>UTTypeIdentifier</key>
 			<string>com.mida.panels.project</string>
 			<key>UTTypeDescription</key>
-			<string>Panels Project</string>
+			<string>Koma Desk Project</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>com.apple.package</string>
@@ -81,12 +106,6 @@
 				</array>
 			</dict>
 		</dict>
-	</array>
-
-	<!-- .cbr / .cbz aren't system-declared types, so Panels imports the
-	     identifiers other comic readers already use. -->
-	<key>UTImportedTypeDeclarations</key>
-	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
 			<string>cx.c3.cbr-archive</string>
@@ -125,7 +144,7 @@
 		</dict>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>com.mida.panels.cb7-archive</string>
+			<string>com.mida.komadesk.cb7-archive</string>
 			<key>UTTypeDescription</key>
 			<string>Comic Book 7-Zip Archive</string>
 			<key>UTTypeConformsTo</key>

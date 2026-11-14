@@ -32,7 +32,7 @@ public struct ResolvedSeries: Sendable, Equatable {
     }
 }
 
-/// One source site Panels knows how to read directly from a link, the way
+/// One source site Koma Desk knows how to read directly from a link, the way
 /// cubari.moe's per-site scrapers do. Adding a new site is one adapter
 /// conforming to this, registered in `RemoteComicSource.adapters`.
 protocol SiteAdapter: Sendable {

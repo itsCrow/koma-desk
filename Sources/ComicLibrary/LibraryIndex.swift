@@ -98,7 +98,7 @@ public enum LibraryStore {
     public static var defaultFolder: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return support.appendingPathComponent("PanelsMVP", isDirectory: true)
+        return support.appendingPathComponent("KomaDesk", isDirectory: true)
     }
 
     public static func indexURL(in folder: URL = defaultFolder) -> URL { folder.appendingPathComponent("library.json") }

@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import PanelsFormat
+import KomaFormat
 @testable import PageSearch
 import ComicArchive
 
@@ -64,7 +64,7 @@ struct IndexTests {
     @Test("Round-trips through the store, and rejects a stale page count")
     func storeRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-index-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-index-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = TextIndexStore(directory: dir)
 

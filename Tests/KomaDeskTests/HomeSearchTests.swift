@@ -1,5 +1,5 @@
 import Testing
-@testable import Panels
+@testable import KomaDesk
 
 @Suite("Home search")
 struct HomeSearchTests {

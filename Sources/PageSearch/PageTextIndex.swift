@@ -1,5 +1,5 @@
 import Foundation
-import PanelsFormat
+import KomaFormat
 
 /// One line of lettering read off a page.
 public struct TextLine: Codable, Sendable, Equatable {

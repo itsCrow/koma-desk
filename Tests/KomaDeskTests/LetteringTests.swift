@@ -1,5 +1,5 @@
 import Testing
-@testable import Panels
+@testable import KomaDesk
 
 @Suite("Lettering copied off a page")
 struct LetteringTests {

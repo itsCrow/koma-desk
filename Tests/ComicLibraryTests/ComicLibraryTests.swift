@@ -9,7 +9,7 @@ struct LibraryScannerTests {
     /// and the junk that comes with them.
     static func makeCollection() throws -> URL {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-collection-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-collection-\(UUID().uuidString)", isDirectory: true)
         let files: [(String, Int)] = [
             ("Berserk (Digital) (danke-Empire)/Berserk v10 (2005) (Digital).cbz", 300),
             ("Berserk (Digital) (danke-Empire)/Berserk v01 (2003) (Digital).cbz", 100),
@@ -95,7 +95,7 @@ struct LibraryScannerTests {
     @Test("Arcs keep their folder order even though chapter numbers restart in each")
     func arcsFollowFolderOrder() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-arcs-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-arcs-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
         func make(_ path: String) throws {

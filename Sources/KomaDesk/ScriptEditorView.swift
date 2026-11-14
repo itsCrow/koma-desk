@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import PanelsProject
+import KomaProject
 
 /// The script pane: a plain text view whose citations are chips.
 ///
@@ -1783,7 +1783,7 @@ final class ScriptTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         // A selection on a page keeps its own view first responder; let go
         // of it before this view asks for the keyboard.
-        NotificationCenter.default.post(name: .panelsClearPageTextSelection, object: nil)
+        NotificationCenter.default.post(name: .komaDeskClearPageTextSelection, object: nil)
         let point = convert(event.locationInWindow, from: nil)
         // The margin rule goes to the pages, or toggles a beat done. Clicking
         // the words never does either — that has to keep placing the caret.
@@ -1830,7 +1830,7 @@ final class ScriptTextView: NSTextView {
     }
 
     override func becomeFirstResponder() -> Bool {
-        NotificationCenter.default.post(name: .panelsClearPageTextSelection, object: nil)
+        NotificationCenter.default.post(name: .komaDeskClearPageTextSelection, object: nil)
         let result = super.becomeFirstResponder()
         if result { onFocusChange?(true) }
         return result

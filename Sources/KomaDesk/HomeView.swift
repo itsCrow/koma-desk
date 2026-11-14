@@ -81,7 +81,7 @@ private struct HomeSidebar: View {
     @FocusState private var searchFocused: Bool
     /// 0 until the writer chooses, which stays open. 1 open, 2 closed.
     /// A Bool would come back false the first time, before any choice.
-    @AppStorage("PanelsProjectsSidebarExpanded") private var projectsDisclosure = 0
+    @AppStorage("KomaDeskProjectsSidebarExpanded") private var projectsDisclosure = 0
 
     private var projectsOpen: Bool { projectsDisclosure != 2 }
 

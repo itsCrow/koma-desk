@@ -1,5 +1,5 @@
 import SwiftUI
-import PanelsProject
+import KomaProject
 
 /// Bold, italic, a style level, alignment, a highlight, and a text color —
 /// pinned under the script pane's header the way Word or Docs pins theirs,

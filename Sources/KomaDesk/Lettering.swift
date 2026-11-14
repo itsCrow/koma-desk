@@ -91,7 +91,7 @@ enum Lettering {
 
     // MARK: - Copying off a page
 
-    private static let log = Logger(subsystem: "Panels", category: "Lettering")
+    private static let log = Logger(subsystem: "com.mida.KomaDesk", category: "Lettering")
 
     /// Every page's Live Text overlay, so a copy can be matched to the
     /// selection it came from. Weak: a page going off screen takes its

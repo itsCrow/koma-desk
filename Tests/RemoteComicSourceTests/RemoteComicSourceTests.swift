@@ -34,7 +34,7 @@ struct ManifestSourceTests {
 
     init() {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsRemoteTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskRemoteTests-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         RemoteComicSource.cacheRootOverride = root
     }
@@ -163,7 +163,7 @@ struct RemoteCacheLifetimeTests {
     @Test("A chapter left in the temporary folder moves, and an existing copy is kept")
     func migratesWithoutReplacing() throws {
         let scratch = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsRemoteMigrate-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskRemoteMigrate-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
         let legacy = scratch.appendingPathComponent("legacy", isDirectory: true)
         let dest = scratch.appendingPathComponent("dest", isDirectory: true)

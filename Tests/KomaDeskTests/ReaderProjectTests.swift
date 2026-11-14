@@ -2,11 +2,11 @@ import Testing
 import Foundation
 import CoreGraphics
 import AppKit
-@testable import Panels
+@testable import KomaDesk
 import ComicArchive
 import ComicLibrary
-import PanelsFormat
-import PanelsProject
+import KomaFormat
+import KomaProject
 import PageCapture
 
 /// The reader, the library and a project together, driven the way the menus
@@ -26,15 +26,16 @@ struct ReaderProjectTests {
         let library: Library
         let projects: ProjectLibrary
         let model: ReaderModel
+        let settings = ScratchDefaults()
 
         init() throws {
             root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+                .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             library = Library(folder: root.appendingPathComponent("Library", isDirectory: true))
             let projectsRoot = root.appendingPathComponent("Projects", isDirectory: true)
             try FileManager.default.createDirectory(at: projectsRoot, withIntermediateDirectories: true)
-            projects = ProjectLibrary(root: projectsRoot, defaults: UserDefaults(suiteName: "PanelsTests-\(UUID().uuidString)")!)
+            projects = ProjectLibrary(root: projectsRoot, defaults: settings.defaults)
             model = ReaderModel(library: library, projects: projects)
         }
 
@@ -42,6 +43,7 @@ struct ReaderProjectTests {
             model.closeProject()
             model.closeComic()
             try? FileManager.default.removeItem(at: root)
+            settings.remove()
         }
 
         /// A project folder about `series`, made directly rather than
@@ -102,13 +104,13 @@ struct ReaderProjectTests {
         #expect(projects.summaries.map(\.name) == ["Draft"])
 
         let renamed = try projects.rename(url, to: "Final")
-        #expect(renamed.lastPathComponent == "Final.panelsproject")
+        #expect(renamed.lastPathComponent == "Final.komadesk")
         #expect(try ProjectStore.loadManifest(renamed).name == "Final")
         #expect(try ProjectStore.loadManifest(renamed).series == ["Berserk"])
         #expect(projects.summaries.map(\.name) == ["Final"])
 
         let copy = try projects.duplicate(renamed)
-        #expect(copy.lastPathComponent == "Final copy.panelsproject")
+        #expect(copy.lastPathComponent == "Final copy.komadesk")
         #expect(Set(projects.summaries.map(\.name)) == ["Final", "Final copy"])
 
         try projects.trash(copy)
@@ -967,7 +969,7 @@ struct ReaderProjectTests {
         let (coordinator, textView, project) = try editor(script: "", in: scratch)
         // Wired the way `ScriptEditorView.makeNSView` wires it.
         textView.attributedString = { [weak coordinator] markdown in coordinator?.render(markdown) ?? NSAttributedString() }
-        let pasteboard = NSPasteboard(name: NSPasteboard.Name("PanelsTests-\(UUID().uuidString)"))
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("KomaDeskTests-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
 
         pasteboard.clearContents()

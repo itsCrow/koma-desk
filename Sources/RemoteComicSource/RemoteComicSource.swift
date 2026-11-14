@@ -27,7 +27,7 @@ public enum RemoteComicSource {
     public static var persistentCacheRoot: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        return support.appendingPathComponent("PanelsMVP/RemotePages", isDirectory: true)
+        return support.appendingPathComponent("KomaDesk/RemotePages", isDirectory: true)
     }
 
     /// Downloads used to live here. Moved once into `persistentCacheRoot`.

@@ -39,7 +39,7 @@ extension ComicArchive {
     static let junkNames: Set<String> = ["__macosx", "thumbs.db", "desktop.ini"]
 
     public static var cacheRoot: URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("Panels", isDirectory: true)
+        FileManager.default.temporaryDirectory.appendingPathComponent("KomaDesk", isDirectory: true)
     }
 
     /// Opens `url`, extracting its pages (or reusing a previous extraction).

@@ -5,10 +5,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ComicArchive
 import ComicLibrary
-import PanelsFormat
+import KomaFormat
 import PageSearch
 import PageCapture
-import PanelsProject
+import KomaProject
 import RemoteComicSource
 
 /// Which side of the pages the script pane sits on.
@@ -204,8 +204,8 @@ final class ReaderModel {
     /// "Import from Link…" is showing its sheet.
     var isImportingLink = false
     /// How the library's series are ordered.
-    var librarySort: LibrarySort = LibrarySort(rawValue: UserDefaults.standard.string(forKey: "PanelsLibrarySort") ?? "") ?? .recent {
-        didSet { UserDefaults.standard.set(librarySort.rawValue, forKey: "PanelsLibrarySort") }
+    var librarySort: LibrarySort = LibrarySort(rawValue: UserDefaults.standard.string(forKey: "KomaDeskLibrarySort") ?? "") ?? .recent {
+        didSet { UserDefaults.standard.set(librarySort.rawValue, forKey: "KomaDeskLibrarySort") }
     }
     /// The "Open URL…" sheet is resolving what's at the link.
     private(set) var isAddingRemoteSource = false
@@ -269,8 +269,8 @@ final class ReaderModel {
         didSet { UserDefaults.standard.set(projectsViewMode.rawValue, forKey: Self.projectsViewModeKey) }
     }
     /// How projects are ordered within their series on the Projects tab.
-    var projectsSort: ProjectsSort = ProjectsSort(rawValue: UserDefaults.standard.string(forKey: "PanelsProjectsSort") ?? "") ?? .recent {
-        didSet { UserDefaults.standard.set(projectsSort.rawValue, forKey: "PanelsProjectsSort") }
+    var projectsSort: ProjectsSort = ProjectsSort(rawValue: UserDefaults.standard.string(forKey: "KomaDeskProjectsSort") ?? "") ?? .recent {
+        didSet { UserDefaults.standard.set(projectsSort.rawValue, forKey: "KomaDeskProjectsSort") }
     }
     /// Shapes to outline on pages after a jump, keyed by page file. Unit
     /// coords, top-left origin. Cleared after a moment.
@@ -345,14 +345,14 @@ final class ReaderModel {
     @ObservationIgnored private var pendingSpanLanding: Int?
     @ObservationIgnored private var focusTask: Task<Void, Never>?
 
-    private static let directionKey = "PanelsReadingDirection"
-    private static let pageLayoutKey = "PanelsPageLayout"
-    private static let readingOrientationKey = "PanelsReadingOrientation"
-    private static let showsScriptKey = "PanelsShowsScript"
-    private static let showsContentsKey = "PanelsShowsSeriesContents"
-    private static let scriptPlacementKey = "PanelsScriptPlacement"
-    private static let projectsViewModeKey = "PanelsProjectsViewMode"
-    private static let beatRailWidthKey = "PanelsBeatRailWidth"
+    private static let directionKey = "KomaDeskReadingDirection"
+    private static let pageLayoutKey = "KomaDeskPageLayout"
+    private static let readingOrientationKey = "KomaDeskReadingOrientation"
+    private static let showsScriptKey = "KomaDeskShowsScript"
+    private static let showsContentsKey = "KomaDeskShowsSeriesContents"
+    private static let scriptPlacementKey = "KomaDeskScriptPlacement"
+    private static let projectsViewModeKey = "KomaDeskProjectsViewMode"
+    private static let beatRailWidthKey = "KomaDeskBeatRailWidth"
 
     init(library: Library = Library(), projects: ProjectLibrary = ProjectLibrary()) {
         self.library = library
@@ -1090,7 +1090,7 @@ final class ReaderModel {
     func presentOpenProjectPanel() {
         let panel = NSOpenPanel()
         panel.title = "Open Project"
-        panel.allowedContentTypes = [.panelsProject]
+        panel.allowedContentTypes = [.komaDeskProject, .legacyProject]
         panel.treatsFilePackagesAsDirectories = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }

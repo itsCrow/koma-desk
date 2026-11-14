@@ -1,6 +1,6 @@
 import Foundation
 import Vision
-import PanelsFormat
+import KomaFormat
 
 /// Reads the lettering off a page with the system's on-device OCR.
 public enum PageTextRecognizer {

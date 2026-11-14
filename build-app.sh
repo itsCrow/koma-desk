@@ -15,9 +15,9 @@ echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
-cp ".build/release/Panels" "$CONTENTS/MacOS/Koma Desk"
+cp ".build/release/KomaDesk" "$CONTENTS/MacOS/Koma Desk"
 cp "Resources/Info.plist" "$CONTENTS/Info.plist"
-cp "Resources/Panels.icns" "$CONTENTS/Resources/Panels.icns"
+cp "Resources/KomaDesk.icns" "$CONTENTS/Resources/KomaDesk.icns"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
 echo "==> Signing (ad-hoc)"

@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import PanelsProject
+import KomaProject
 
 /// The colours that carry meaning, decided together rather than one at a time.
 ///

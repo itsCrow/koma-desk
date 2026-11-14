@@ -355,7 +355,7 @@ private final class SpreadDocumentView: NSView {
         }
         liveTextViews = zip(images, imageViews).map { image, imageView in
             let overlay = ImageAnalysisOverlayView()
-            NotificationCenter.default.addObserver(forName: .panelsClearPageTextSelection, object: nil, queue: .main) { [weak overlay] _ in
+            NotificationCenter.default.addObserver(forName: .komaDeskClearPageTextSelection, object: nil, queue: .main) { [weak overlay] _ in
                 MainActor.assumeIsolated { overlay?.resetSelection() }
             }
             overlay.trackingImageView = imageView
@@ -451,7 +451,7 @@ extension Notification.Name {
     /// Posted when something else wants the keyboard: Live Text's selection
     /// view holds on to first responder for as long as it has a selection, so
     /// the selection has to go first.
-    static let panelsClearPageTextSelection = Notification.Name("PanelsClearPageTextSelection")
+    static let komaDeskClearPageTextSelection = Notification.Name("KomaDeskClearPageTextSelection")
 }
 
 /// Live Text analyses, one per page, so a page shown twice is analysed once.

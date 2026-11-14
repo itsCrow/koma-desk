@@ -1,5 +1,6 @@
 import AppKit
 import ComicArchive
+import KomaProject
 import RemoteComicSource
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -31,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Double-clicking a .cbr, a folder or a .panelsproject in Finder, or
+    /// Double-clicking a .cbr, a folder or a .komadesk in Finder, or
     /// dropping one on the Dock icon. Comics join the library on the way in.
     func application(_ application: NSApplication, open urls: [URL]) {
         MainActor.assumeIsolated {
@@ -49,10 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             let model = ReaderModel.shared
-            if let project = urls.first(where: { $0.pathExtension.lowercased() == "panelsproject" }) {
+            if let project = urls.first(where: ProjectStore.isProjectURL) {
                 model.openProject(at: project)
             }
-            for url in urls where url.pathExtension.lowercased() != "panelsproject" {
+            for url in urls where !ProjectStore.isProjectURL(url) {
                 let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
                 if isDirectory || ReaderModel.supportedExtensions.contains(url.pathExtension.lowercased()) {
                     model.addToLibrary(url)

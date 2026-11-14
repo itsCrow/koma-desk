@@ -1,7 +1,7 @@
 import Testing
 import Foundation
-import PanelsFormat
-@testable import PanelsProject
+import KomaFormat
+@testable import KomaProject
 
 @Suite("Script Markdown")
 struct ScriptMarkdownTests {
@@ -362,9 +362,9 @@ struct ProjectStoreTests {
     @Test("Create, save and load a project folder")
     func roundTrip() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Test.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Test.komadesk", isDirectory: true)
 
         var loaded = try ProjectStore.create(at: url, name: "Test", series: ["Berserk"])
         #expect(FileManager.default.fileExists(atPath: ProjectStore.capturesFolder(of: url).path))
@@ -397,9 +397,9 @@ struct ProjectStoreTests {
     @Test("A project about several series saves them as a list and reads them back in order")
     func multiSeriesRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Two.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Two.komadesk", isDirectory: true)
 
         let loaded = try ProjectStore.create(at: url, name: "Two", series: ["Berserk", "Vagabond", "Berserk", ""])
         #expect(loaded.manifest.series == ["Berserk", "Vagabond"])
@@ -458,9 +458,9 @@ struct ProjectStoreTests {
     @Test("A version-3 project opens and comes forward, keeping everything it had")
     func upgradesFromVersion3() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Old.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Old.komadesk", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
 
         // Written by hand exactly as version 3 wrote it — no "spans" key at
@@ -514,9 +514,9 @@ struct ProjectStoreTests {
     @Test("Page ranges round-trip, and replace rather than pile up")
     func spansRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Spans.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Spans.komadesk", isDirectory: true)
         var loaded = try ProjectStore.create(at: url, name: "Spans", series: ["Berserk"])
 
         let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|5", firstPageIndex: 11,
@@ -543,9 +543,9 @@ struct ProjectStoreTests {
     @Test("Beats round-trip, and replace rather than pile up")
     func beatsRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Beats.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Beats.komadesk", isDirectory: true)
         var loaded = try ProjectStore.create(at: url, name: "Beats", series: ["Berserk"])
 
         let beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
@@ -574,9 +574,9 @@ struct ProjectStoreTests {
     @Test("A beat's tags round-trip, in order, with their own color")
     func beatTagsRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Tags.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Tags.komadesk", isDirectory: true)
         var loaded = try ProjectStore.create(at: url, name: "Tags", series: ["Berserk"])
 
         var beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
@@ -621,9 +621,9 @@ struct ProjectStoreTests {
     @Test("A beat's own color round-trips, and defaults to none")
     func beatColorRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Color.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Color.komadesk", isDirectory: true)
         var loaded = try ProjectStore.create(at: url, name: "Color", series: ["Berserk"])
 
         var beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
@@ -665,9 +665,9 @@ struct ProjectStoreTests {
     @Test("A version-4 project opens and comes forward, with no beats yet")
     func upgradesFromVersion4() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Old.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Old.komadesk", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
 
         // Written by hand exactly as version 4 wrote it — no "beats" key.
@@ -692,9 +692,9 @@ struct ProjectStoreTests {
     @Test("A project from the earlier format is refused, not half-read")
     func refusesOldFormat() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("Old.panelsproject", isDirectory: true)
+        let url = dir.appendingPathComponent("Old.komadesk", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         let legacy = """
         {"version":1,"name":"Old","comics":[{"id":"abc123","title":"Berserk v01","path":"/x/b.cbz","filename":"b.cbz","fileSize":5}],"citations":[],"positions":{}}
@@ -709,37 +709,37 @@ struct ProjectStoreTests {
     @Test("Listing a folder finds its projects and nothing else")
     func listing() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-root-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-root-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        _ = try ProjectStore.create(at: root.appendingPathComponent("A.panelsproject"), name: "A", series: ["S"])
-        _ = try ProjectStore.create(at: root.appendingPathComponent("B.panelsproject"), name: "B", series: ["S"])
+        _ = try ProjectStore.create(at: root.appendingPathComponent("A.komadesk"), name: "A", series: ["S"])
+        _ = try ProjectStore.create(at: root.appendingPathComponent("B.komadesk"), name: "B", series: ["S"])
         // Things that look like projects but aren't.
-        try FileManager.default.createDirectory(at: root.appendingPathComponent("Empty.panelsproject"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Empty.komadesk"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Folder"), withIntermediateDirectories: true)
-        try Data().write(to: root.appendingPathComponent("file.panelsproject"))
+        try Data().write(to: root.appendingPathComponent("file.komadesk"))
         try Data().write(to: root.appendingPathComponent("notes.txt"))
 
         let found = Set(ProjectStore.list(in: root).map(\.lastPathComponent))
-        #expect(found == ["A.panelsproject", "B.panelsproject"])
+        #expect(found == ["A.komadesk", "B.komadesk"])
         #expect(ProjectStore.list(in: root.appendingPathComponent("missing")).isEmpty)
-        #expect(try ProjectStore.loadManifest(root.appendingPathComponent("A.panelsproject")).name == "A")
+        #expect(try ProjectStore.loadManifest(root.appendingPathComponent("A.komadesk")).name == "A")
     }
 
     @Test("New projects get names that aren't taken, and folder-safe ones")
     func uniqueNames() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-names-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-names-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         let first = ProjectStore.uniqueURL(named: "Eclipse", in: root)
-        #expect(first.lastPathComponent == "Eclipse.panelsproject")
+        #expect(first.lastPathComponent == "Eclipse.komadesk")
         _ = try ProjectStore.create(at: first, name: "Eclipse", series: ["Berserk"])
-        #expect(ProjectStore.uniqueURL(named: "Eclipse", in: root).lastPathComponent == "Eclipse 2.panelsproject")
-        #expect(ProjectStore.uniqueURL(named: "Ch: 1/2", in: root).lastPathComponent == "Ch 12.panelsproject")
-        #expect(ProjectStore.uniqueURL(named: "   ", in: root).lastPathComponent == "Untitled.panelsproject")
+        #expect(ProjectStore.uniqueURL(named: "Eclipse", in: root).lastPathComponent == "Eclipse 2.komadesk")
+        #expect(ProjectStore.uniqueURL(named: "Ch: 1/2", in: root).lastPathComponent == "Ch 12.komadesk")
+        #expect(ProjectStore.uniqueURL(named: "   ", in: root).lastPathComponent == "Untitled.komadesk")
     }
 
     @Test("Citation geometry is written with named keys, so anything can read it")

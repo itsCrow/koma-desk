@@ -1,7 +1,7 @@
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
-import PanelsFormat
+import KomaFormat
 
 /// Writes captures to the editor's folder: a PNG carrying its citation, and a
 /// line in the manifest.

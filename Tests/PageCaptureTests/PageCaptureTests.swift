@@ -3,7 +3,7 @@ import Foundation
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
-import PanelsFormat
+import KomaFormat
 @testable import PageCapture
 import ComicArchive
 
@@ -166,7 +166,7 @@ struct PanelDetectorTests {
 struct WriterTests {
     static func scratch() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PanelsTests-capture-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("KomaDeskTests-capture-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

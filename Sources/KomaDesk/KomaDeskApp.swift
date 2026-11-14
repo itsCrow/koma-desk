@@ -2,9 +2,15 @@ import SwiftUI
 import ComicArchive
 
 @main
-struct PanelsApp: App {
+struct KomaDeskApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var model = ReaderModel.shared
+    @State private var model: ReaderModel
+
+    init() {
+        // Before the model exists: it reads the settings and folders this moves.
+        LegacyMigration.runIfNeeded()
+        _model = State(initialValue: ReaderModel.shared)
+    }
 
     var body: some Scene {
         Window("Koma Desk", id: "reader") {

@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import Observation
-import PanelsProject
+import KomaProject
 import PageCapture
 
 /// The open project: the script, its citations, and where they point. Saves
@@ -326,5 +326,7 @@ import UniformTypeIdentifiers
 
 extension UTType {
     /// The project package, as declared in Info.plist.
-    static let panelsProject = UTType(exportedAs: "com.mida.panels.project", conformingTo: .package)
+    static let komaDeskProject = UTType(exportedAs: "com.mida.komadesk.project", conformingTo: .package)
+    /// `.panelsproject`, from before the app was Koma Desk.
+    static let legacyProject = UTType(importedAs: "com.mida.panels.project", conformingTo: .package)
 }

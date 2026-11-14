@@ -1,13 +1,13 @@
 import Testing
 import Foundation
-@testable import Panels
-import PanelsProject
+@testable import KomaDesk
+import KomaProject
 
 @Suite("Projects tab")
 @MainActor
 struct ProjectsTabTests {
     private func summary(_ name: String, opened: TimeInterval? = nil, edited: TimeInterval? = nil) -> ProjectSummary {
-        ProjectSummary(url: URL(fileURLWithPath: "/tmp/\(name).panelsproject"), name: name, series: ["Berserk"],
+        ProjectSummary(url: URL(fileURLWithPath: "/tmp/\(name).komadesk"), name: name, series: ["Berserk"],
                        items: [], citationCount: 0, edited: edited.map(Date.init(timeIntervalSince1970:)),
                        lastOpened: opened.map(Date.init(timeIntervalSince1970:)), picture: nil, isElsewhere: false)
     }
@@ -36,9 +36,11 @@ struct ProjectsTabTests {
 
     @Test("A project about several series is listed once, under all of them together")
     func multiSeriesGrouping() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let library = ProjectLibrary(root: root, defaults: UserDefaults(suiteName: "PanelsTests-\(UUID().uuidString)")!)
+        let settings = ScratchDefaults()
+        defer { settings.remove() }
+        let library = ProjectLibrary(root: root, defaults: settings.defaults)
         _ = try library.create(named: "Swords", series: ["Berserk", "Vagabond"])
         _ = try library.create(named: "Eclipse", series: ["Berserk"])
 
@@ -55,9 +57,11 @@ struct ProjectsTabTests {
 
     @Test("A summary carries the word goal and how many beats are done")
     func summaryStats() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let library = ProjectLibrary(root: root, defaults: UserDefaults(suiteName: "PanelsTests-\(UUID().uuidString)")!)
+        let settings = ScratchDefaults()
+        defer { settings.remove() }
+        let library = ProjectLibrary(root: root, defaults: settings.defaults)
         let url = try library.create(named: "Eclipse", series: ["Berserk"], targetWordCount: 2000)
         var loaded = try ProjectStore.load(url)
         loaded.manifest.beats = [Beat(title: "Cold open", isDone: true), Beat(title: "The brand"), Beat(title: "After", isDone: true)]
@@ -73,9 +77,11 @@ struct ProjectsTabTests {
 
     @Test("A preview counts the narration, not the notes")
     func previewWords() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("KomaDeskTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let library = ProjectLibrary(root: root, defaults: UserDefaults(suiteName: "PanelsTests-\(UUID().uuidString)")!)
+        let settings = ScratchDefaults()
+        defer { settings.remove() }
+        let library = ProjectLibrary(root: root, defaults: settings.defaults)
         let url = try library.create(named: "Eclipse", series: ["Berserk"])
         var loaded = try ProjectStore.load(url)
         loaded.script = "> A note, not narration.\nGuts raises the sword.\n# Heading here"

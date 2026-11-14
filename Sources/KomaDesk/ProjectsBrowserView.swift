@@ -1,5 +1,5 @@
 import SwiftUI
-import PanelsProject
+import KomaProject
 
 /// The projects half of home: the project last worked on, big, to carry on
 /// with — then every project, grouped by series.

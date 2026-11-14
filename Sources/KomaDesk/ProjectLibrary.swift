@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 import Observation
-import PanelsProject
+import KomaProject
 
 /// What the browser knows about a project without opening it.
 struct ProjectSummary: Identifiable, Equatable {
@@ -99,9 +99,9 @@ enum ProjectsSort: String, CaseIterable, Sendable {
 @Observable
 @MainActor
 final class ProjectLibrary {
-    private static let rootKey = "PanelsProjectsRoot"
-    private static let recentsKey = "PanelsProjectRecents"
-    private static let lastOpenedKey = "PanelsProjectLastOpened"
+    private static let rootKey = "KomaDeskProjectsRoot"
+    private static let recentsKey = "KomaDeskProjectRecents"
+    private static let lastOpenedKey = "KomaDeskProjectLastOpened"
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var fixedRoot: URL?
@@ -134,7 +134,7 @@ final class ProjectLibrary {
         refresh()
     }
 
-    /// Where projects live. ~/Documents/Panels Projects unless moved — point it
+    /// Where projects live. ~/Documents/Koma Desk Projects unless moved — point it
     /// at a shared folder and the editor sees every project.
     var root: URL {
         get {
@@ -142,7 +142,7 @@ final class ProjectLibrary {
             if let path = defaults.string(forKey: Self.rootKey) { return URL(fileURLWithPath: path, isDirectory: true) }
             let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
                 ?? FileManager.default.homeDirectoryForCurrentUser
-            return documents.appendingPathComponent("Panels Projects", isDirectory: true)
+            return documents.appendingPathComponent("Koma Desk Projects", isDirectory: true)
         }
         set {
             if fixedRoot != nil { fixedRoot = newValue } else { defaults.set(newValue.path, forKey: Self.rootKey) }

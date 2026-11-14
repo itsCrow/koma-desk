@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import Panels
+@testable import KomaDesk
 import ComicLibrary
 
 @Suite("Library tab")

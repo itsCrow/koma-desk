@@ -1,5 +1,5 @@
 import Foundation
-import PanelsFormat
+import KomaFormat
 
 /// A comic the project cites: one item of the library — a volume, or a
 /// chapter. Referenced by the same id the library uses (filename and size),
