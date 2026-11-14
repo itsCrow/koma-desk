@@ -45,6 +45,26 @@ final class Library {
         index = LibraryStore.load(from: folder)
         // Files come and go between launches.
         rescan()
+        resumeDownloads()
+    }
+
+    /// Downloads whatever a series from the web still lacks: chapters a
+    /// download that was cut short — the app quitting mid-import — never
+    /// reached, and chapters saved with pages missing.
+    private func resumeDownloads() {
+        let remote = index.remoteSeries
+        guard !remote.isEmpty else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            for series in remote {
+                let lacking = series.items.filter { item in
+                    Self.chapterSource(for: item.source).map { !RemoteComicSource.isComplete($0) } ?? false
+                }
+                guard !lacking.isEmpty else { continue }
+                // One series at a time: every series at once is more
+                // connections than the image hosts will hold open.
+                await self?.prefetchAllPages(for: lacking, seriesName: series.name, retryingIncomplete: true)?.value
+            }
+        }
     }
 
     var roots: [URL] { index.roots }
@@ -248,14 +268,15 @@ final class Library {
     /// Reading, from clicking it in the contents — is instant instead of a
     /// wait that reads as a hang. Detached from the caller so import
     /// returns as soon as the chapter *list* is known; failures are left
-    /// for the ordinary open-time download to retry. Progress is published
+    /// for opening the chapter, or the next launch, to retry. Progress is published
     /// to `remoteDownloadProgress` as chapters finish, so the shelf can show
     /// it's actually happening.
-    private func prefetchAllPages(for items: [LibraryItem], seriesName: String) {
+    @discardableResult
+    private func prefetchAllPages(for items: [LibraryItem], seriesName: String, retryingIncomplete: Bool = false) -> Task<Void, Never>? {
         let sources = items.compactMap { Self.chapterSource(for: $0.source) }
-        guard !sources.isEmpty else { return }
+        guard !sources.isEmpty else { return nil }
         remoteDownloadProgress[seriesName] = DownloadProgress(done: 0, total: sources.count)
-        Task.detached(priority: .utility) { [weak self] in
+        return Task.detached(priority: .utility) { [weak self] in
             var completed = 0
             await withTaskGroup(of: Void.self) { group in
                 var next = 0
@@ -263,7 +284,7 @@ final class Library {
                     guard next < sources.count else { return }
                     let source = sources[next]
                     next += 1
-                    group.addTask { _ = try? await RemoteComicSource.open(source) }
+                    group.addTask { _ = try? await RemoteComicSource.open(source, retryingIncomplete: retryingIncomplete) }
                 }
                 for _ in 0..<min(Self.maxConcurrentChapterPrefetches, sources.count) { startNext() }
                 while await group.next() != nil {

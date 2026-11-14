@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 
+
 /// Reads a comic from the web: a link to a known site, or a link to a
 /// generic JSON manifest. Downloads a chapter's pages once and keeps them
 /// until the series is removed — the network equivalent of `ComicArchive` —
@@ -75,16 +76,34 @@ public enum RemoteComicSource {
 
     /// Downloads (or reuses) one chapter's pages, in order, to local disk.
     /// `progress` reports `(downloaded, total)` as pages complete.
+    /// `retryingIncomplete` tries again for a saved chapter that's missing
+    /// pages, keeping the saved copy unless the new one has more of them.
     public static func open(
         _ source: ChapterSource,
+        retryingIncomplete: Bool = false,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> RemoteComic {
         let identity = cacheKey(for: source)
         let directory = cacheRoot.appendingPathComponent(identity, isDirectory: true)
 
         if let cached = loadManifest(in: directory, source: source, identity: identity) {
-            return cached
+            guard retryingIncomplete, cached.warning != nil else { return cached }
+            let retry = directory.deletingLastPathComponent().appendingPathComponent(identity + "-retry", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: retry) }
+            guard let fresh = try? await download(source, identity: identity, into: retry, progress: progress),
+                  fresh.pages.count > cached.pages.count
+            else { return cached }
+            try? FileManager.default.removeItem(at: directory)
+            try FileManager.default.moveItem(at: retry, to: directory)
+            return loadManifest(in: directory, source: source, identity: identity) ?? fresh
         }
+        return try await download(source, identity: identity, into: directory, progress: progress)
+    }
+
+    private static func download(
+        _ source: ChapterSource, identity: String, into directory: URL,
+        progress: (@Sendable (Int, Int) -> Void)?
+    ) async throws -> RemoteComic {
 
         let imageURLs = try await pageImageURLs(for: source)
         guard !imageURLs.isEmpty else { throw RemoteSourceError.noPages }
@@ -143,6 +162,33 @@ public enum RemoteComicSource {
     /// source site and likely to get the requester rate-limited.
     private static let maxConcurrentDownloads = 6
 
+    /// Image hosts drop connections and time out under load; a page that
+    /// failed that way usually comes through a moment later.
+    private static let fetchAttempts = 3
+
+    private static func fetchRetryingTransient(_ url: URL) async throws -> Data {
+        var attempt = 1
+        while true {
+            do {
+                return try await fetcher.fetchData(url)
+            } catch where attempt < fetchAttempts && isTransient(error) {
+                try await Task.sleep(for: .seconds(Double(attempt) * 1.5))
+                attempt += 1
+            }
+        }
+    }
+
+    private static func isTransient(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            return [.timedOut, .networkConnectionLost, .cannotConnectToHost, .notConnectedToInternet, .dnsLookupFailed]
+                .contains(urlError.code)
+        }
+        if case RemoteSourceError.http(let status, _) = error {
+            return status == 429 || (500..<600).contains(status)
+        }
+        return false
+    }
+
     private static func downloadPages(
         _ urls: [URL], into directory: URL, progress: (@Sendable (Int, Int) -> Void)?
     ) async -> Download {
@@ -162,7 +208,7 @@ public enum RemoteComicSource {
                     let ext = url.pathExtension.isEmpty ? "jpg" : url.pathExtension
                     let name = String(format: "%04d.%@", index, ext)
                     do {
-                        let data = try await fetcher.fetchData(url)
+                        let data = try await fetchRetryingTransient(url)
                         try data.write(to: directory.appendingPathComponent(name), options: .atomic)
                         return (index, name)
                     } catch {
@@ -212,6 +258,15 @@ public enum RemoteComicSource {
         let pages = manifest.pages.map { directory.appendingPathComponent($0) }
         guard pages.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else { return nil }
         return RemoteComic(source: source, identity: identity, pages: pages, warning: manifest.warning)
+    }
+
+    /// Whether a chapter is saved with every page, without downloading:
+    /// false when it's not saved, or saved with pages missing.
+    public static func isComplete(_ source: ChapterSource) -> Bool {
+        let identity = cacheKey(for: source)
+        let directory = cacheRoot.appendingPathComponent(identity, isDirectory: true)
+        guard let cached = loadManifest(in: directory, source: source, identity: identity) else { return false }
+        return cached.warning == nil
     }
 
     private static func saveManifest(_ manifest: Manifest, in directory: URL) {
