@@ -30,10 +30,35 @@ final class SpreadScrollView: NSScrollView {
     private(set) var isCapturing = false
 
     func setCapturing(_ capturing: Bool) {
+        let changed = capturing != isCapturing
         isCapturing = capturing
         pageView.setCapturing(capturing)
+        guard changed, isFitted, window != nil, pageView.hasImages else { return }
+        // A fitted page shrinks clear of the window's edges for capturing,
+        // and grows back after; a zoomed one is left where the reader put it.
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.allowsImplicitAnimation = true
+            updateMagnificationLimits(resettingToFit: true, animated: true)
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.updateMagnificationLimits(resettingToFit: self.isFitted)
+                self.swipeCoordinator?.contentWidthChanged()
+            }
+        })
     }
 
+    /// Room kept round a fitted page while capturing, so a panel at the top
+    /// or bottom isn't drawn against the screen's edge — where the Dock
+    /// and the capture hint sit. Only in the swiping reader: the vertical
+    /// one scrolls any panel to the middle anyway.
+    private var captureInset: NSSize {
+        guard isCapturing, swipeCoordinator != nil else { return .zero }
+        let size = bounds.size
+        // Never so much that the page drops below three quarters of the window.
+        return NSSize(width: min(24, size.width * 0.05), height: min(60, size.height * 0.125))
+    }
 
 
     private let pageView = SpreadDocumentView()
@@ -129,13 +154,14 @@ final class SpreadScrollView: NSScrollView {
     /// than the window — so "fitted" is a fraction of it. Pinning
     /// `minMagnification` to the fitted scale is what stops the page shrinking
     /// away into the middle of a black void.
-    private func updateMagnificationLimits(resettingToFit: Bool) {
+    private func updateMagnificationLimits(resettingToFit: Bool, animated: Bool = false) {
         let content = pageView.frame.size
         // The scroll view's own bounds, not the clip view's frame. Under
         // magnification the clip view's frame can grow to the page, which
         // makes "fitted" mean native size — a portrait page then runs off the
         // bottom of a window shaped for a spread.
-        let viewport = bounds.size
+        let inset = captureInset
+        let viewport = NSSize(width: bounds.width - inset.width * 2, height: bounds.height - inset.height * 2)
         guard content.width > 0, content.height > 0,
               viewport.width > 0, viewport.height > 0
         else { return }
@@ -146,6 +172,13 @@ final class SpreadScrollView: NSScrollView {
         // Max before min: raising the floor above the ceiling makes AppKit
         // clamp in an order we don't control.
         maxMagnification = fit * 6
+        if animated {
+            // A floor raised above the page now would snap it up to size
+            // rather than grow it; the completion settles the floor after.
+            minMagnification = min(fit, magnification)
+            animator().magnification = fit
+            return
+        }
         minMagnification = fit
         if resettingToFit || magnification < fit {
             magnification = fit
