@@ -1311,7 +1311,7 @@ final class ScriptTextView: NSTextView {
     /// The selection as script Markdown. Chips have no bytes of their own,
     /// so RTF loses them; Markdown carries them exactly — and it's what
     /// drags, copies and pastes travel as, within the pane.
-    static let markdownType = NSPasteboard.PasteboardType("com.mida.panels.script-markdown")
+    static let markdownType = NSPasteboard.PasteboardType("com.mida.komadesk.script-markdown")
 
     var onFocusChange: ((Bool) -> Void)?
     var markdown: ((NSRange) -> String)?
