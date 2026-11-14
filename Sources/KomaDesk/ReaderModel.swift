@@ -1585,7 +1585,10 @@ final class ReaderModel {
         focusOutlines = [page: [outline.cgPoints]]
         focusTask?.cancel()
         focusTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            // Long enough to spot, short enough not to sit over the page
+            // while the writer goes back to typing. Clicking the chip again
+            // shows it again.
+            try? await Task.sleep(for: .seconds(1.2))
             guard !Task.isCancelled else { return }
             self?.focusOutlines = [:]
         }
