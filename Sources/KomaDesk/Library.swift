@@ -28,6 +28,9 @@ final class Library {
     private(set) var remoteRefreshNotice: [String: RemoteRefreshNotice] = [:]
 
     @ObservationIgnored private var refreshTasks: [String: Task<RemoteRefreshOutcome, Never>] = [:]
+    /// Chapter downloads running for each series, so removing the series
+    /// can stop them before they write pages back.
+    @ObservationIgnored private var prefetchTasks: [String: [UUID: Task<Void, Never>]] = [:]
     @ObservationIgnored private var noticeGeneration: [String: Int] = [:]
 
     struct DownloadProgress: Equatable {
@@ -54,8 +57,13 @@ final class Library {
     private func resumeDownloads() {
         let remote = index.remoteSeries
         guard !remote.isEmpty else { return }
+        let everyChapter = remote.flatMap(\.items).compactMap { Self.chapterSource(for: $0.source) }
         Task.detached(priority: .utility) { [weak self] in
+            // Pages of series removed while their chapters were still
+            // arriving, from before removing one stopped its downloads.
+            RemoteComicSource.removeCachedChapters(except: everyChapter)
             for series in remote {
+                guard await self?.isRemoteSeries(named: series.name) == true else { continue }
                 let lacking = series.items.filter { item in
                     Self.chapterSource(for: item.source).map { RemoteComicSource.cacheState($0) != .complete } ?? false
                 }
@@ -276,12 +284,13 @@ final class Library {
         let chapters = items.compactMap { item in Self.chapterSource(for: item.source).map { (id: item.id, source: $0) } }
         guard !chapters.isEmpty else { return nil }
         remoteDownloadProgress[seriesName] = DownloadProgress(done: 0, total: chapters.count)
-        return Task.detached(priority: .utility) { [weak self] in
+        let id = UUID()
+        let task = Task.detached(priority: .utility) { [weak self] in
             var completed = 0
             await withTaskGroup(of: (String, RemoteComicSource.CacheState).self) { group in
                 var next = 0
                 func startNext() async {
-                    guard next < chapters.count else { return }
+                    guard next < chapters.count, !Task.isCancelled else { return }
                     let chapter = chapters[next]
                     next += 1
                     await self?.noteChapterDownloading(chapter.id)
@@ -292,6 +301,8 @@ final class Library {
                 }
                 for _ in 0..<min(Self.maxConcurrentChapterPrefetches, chapters.count) { await startNext() }
                 while let (id, state) = await group.next() {
+                    // Removed: let what's left drain without reporting on it.
+                    guard !Task.isCancelled else { continue }
                     completed += 1
                     let done = completed
                     await self?.noteChapterDownloaded(id, state: state)
@@ -299,7 +310,15 @@ final class Library {
                     await startNext()
                 }
             }
+            await self?.prefetchFinished(id, seriesName: seriesName)
         }
+        prefetchTasks[seriesName, default: [:]][id] = task
+        return task
+    }
+
+    private func prefetchFinished(_ id: UUID, seriesName: String) {
+        prefetchTasks[seriesName]?[id] = nil
+        if prefetchTasks[seriesName]?.isEmpty == true { prefetchTasks[seriesName] = nil }
     }
 
     // MARK: - What's saved of each chapter
@@ -362,7 +381,11 @@ final class Library {
     /// only these can be removed on their own; a folder-scanned series goes
     /// away with `removeRoot` instead.
     func isRemoteSeries(_ series: Series) -> Bool {
-        index.remoteSeries.contains { $0.name == series.name }
+        isRemoteSeries(named: series.name)
+    }
+
+    func isRemoteSeries(named name: String) -> Bool {
+        index.remoteSeries.contains { $0.name == name }
     }
 
     func isRemoteItem(_ item: LibraryItem) -> Bool {
@@ -398,13 +421,26 @@ final class Library {
         remoteDownloadProgress[removed.name] = nil
         remoteRefreshNotice[removed.name] = nil
         remoteRefreshInFlight.remove(removed.name)
+        let running = Array((prefetchTasks.removeValue(forKey: removed.name) ?? [:]).values)
+        running.forEach { $0.cancel() }
+        let sources = removed.items.compactMap { Self.chapterSource(for: $0.source) }
         for item in removed.items {
             index.positions[item.id] = nil
             index.spreadCounts[item.id] = nil
             index.covers[item.id] = nil
+            downloadingChapters.remove(item.id)
+            chapterStates[item.id] = nil
             try? FileManager.default.removeItem(at: coverURL(for: item))
-            if let source = Self.chapterSource(for: item.source) {
-                RemoteComicSource.forget(source)
+        }
+        sources.forEach(RemoteComicSource.forget)
+        if !running.isEmpty {
+            // A chapter mid-download when it was cancelled can still land.
+            let name = removed.name
+            Task.detached(priority: .utility) { [weak self] in
+                for task in running { await task.value }
+                // Added straight back meanwhile: those pages are wanted again.
+                guard await self?.isRemoteSeries(named: name) != true else { return }
+                sources.forEach(RemoteComicSource.forget)
             }
         }
         scheduleSave()

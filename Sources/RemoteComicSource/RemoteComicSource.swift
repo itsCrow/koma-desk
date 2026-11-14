@@ -113,6 +113,12 @@ public enum RemoteComicSource {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let downloaded = await downloadPages(imageURLs, into: directory, progress: progress)
+        // Stopped partway — the series was removed — so the pages that made
+        // it aren't a chapter anyone still wants.
+        if Task.isCancelled {
+            try? FileManager.default.removeItem(at: directory)
+            throw CancellationError()
+        }
         guard !downloaded.pages.isEmpty else {
             try? FileManager.default.removeItem(at: directory)
             throw RemoteSourceError.noPages
@@ -135,6 +141,28 @@ public enum RemoteComicSource {
     public static func forget(_ source: ChapterSource) {
         let directory = cacheRoot.appendingPathComponent(cacheKey(for: source), isDirectory: true)
         try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// Deletes every saved chapter that isn't one of `keep`, along with any
+    /// retry left by a quit mid-download. Only folders named the way chapters
+    /// are; anything else in the cache folder is left alone. Returns how many
+    /// went.
+    @discardableResult
+    public static func removeCachedChapters(except keep: [ChapterSource]) -> Int {
+        let kept = Set(keep.map(cacheKey(for:)))
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(
+            at: cacheRoot, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var removed = 0
+        for entry in entries {
+            let name = entry.lastPathComponent
+            let key = name.hasSuffix("-retry") ? String(name.dropLast("-retry".count)) : name
+            guard key.count == 64, key.allSatisfy(\.isHexDigit),
+                  name != key || !kept.contains(key) else { continue }
+            if (try? manager.removeItem(at: entry)) != nil { removed += 1 }
+        }
+        return removed
     }
 
     // MARK: - Resolving pages

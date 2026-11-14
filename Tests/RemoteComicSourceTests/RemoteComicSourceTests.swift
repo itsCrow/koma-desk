@@ -135,6 +135,35 @@ struct ManifestSourceTests {
         #expect(RemoteComicSource.cacheState(full) == .missing)
     }
 
+    @Test("A download stopped partway leaves nothing saved")
+    func cancelledDownloadLeavesNothing() async throws {
+        RemoteComicSource.fetcher = FakeFetcher(responses: [manifestURL: manifestJSON(), page1: Data([0xAA]), page2: Data([0xBB])])
+        let source = ChapterSource.manifest(manifestURL: manifestURL, chapterKey: "1")
+        let download = Task { try await RemoteComicSource.open(source) }
+        download.cancel()
+        await #expect(throws: CancellationError.self) { try await download.value }
+        #expect(RemoteComicSource.cacheState(source) == .missing)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: RemoteComicSource.cacheRoot.path).isEmpty)
+    }
+
+    @Test("Clearing the cache keeps the chapters asked for and anything that isn't a chapter")
+    func removesOtherChapters() async throws {
+        RemoteComicSource.fetcher = FakeFetcher(responses: [manifestURL: manifestJSON(), page1: Data([0xAA]), page2: Data([0xBB])])
+        let kept = ChapterSource.manifest(manifestURL: manifestURL, chapterKey: "1")
+        let dropped = ChapterSource.manifest(manifestURL: manifestURL, chapterKey: "2.0")
+        let keptComic = try await RemoteComicSource.open(kept)
+        _ = try await RemoteComicSource.open(dropped)
+        let root = RemoteComicSource.cacheRoot
+        let manager = FileManager.default
+        try manager.createDirectory(at: root.appendingPathComponent(keptComic.identity + "-retry"), withIntermediateDirectories: true)
+        try manager.createDirectory(at: root.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+
+        #expect(RemoteComicSource.removeCachedChapters(except: [kept]) == 2)
+        #expect(RemoteComicSource.cacheState(kept) == .complete)
+        #expect(RemoteComicSource.cacheState(dropped) == .missing)
+        #expect(try manager.contentsOfDirectory(atPath: root.path).sorted() == [keptComic.identity, "Notes"])
+    }
+
     @Test("A chapter no longer in the manifest fails clearly")
     func missingChapterFails() async throws {
         RemoteComicSource.fetcher = FakeFetcher(responses: [manifestURL: manifestJSON()])
