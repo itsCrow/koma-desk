@@ -39,6 +39,9 @@ struct ReaderView: View {
         .sheet(isPresented: $model.wantsNewProject) {
             NewProjectSheet(model: model)
         }
+        .sheet(isPresented: $model.wantsAddSeries) {
+            AddSeriesSheet(model: model)
+        }
         .sheet(item: $model.linkingPages) { request in
             LinkPagesSheet(model: model, request: request)
         }
@@ -317,8 +320,8 @@ struct ReaderView: View {
                 if let warning = model.warning {
                     WarningBanner(text: warning)
                 }
-                if model.hasComic, let missing = model.missingSeries {
-                    MissingSeriesBanner(series: missing) { model.library.presentAddPanel() }
+                if model.hasComic, !model.missingSeries.isEmpty {
+                    MissingSeriesBanner(series: model.missingSeries) { model.library.presentAddPanel() }
                 }
                 if model.isCapturing {
                     HStack(spacing: 14) {
@@ -499,17 +502,17 @@ private struct PageChooser: View {
     }
 }
 
-/// The project's series isn't in the library — the editor's Mac, before
-/// they've added the folder. Said plainly, rather than found out when a
-/// citation is clicked.
+/// Some of the project's series aren't in the library — the editor's Mac,
+/// before they've added the folders. Said plainly, rather than found out
+/// when a citation is clicked.
 private struct MissingSeriesBanner: View {
-    let series: String
+    let series: [String]
     let add: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "questionmark.folder")
-            Text("This project is about \(series), which isn’t in your library")
+            Text(MissingSeriesNotice.sentence(series))
                 .lineLimit(1)
             Button("Add Folder…", action: add)
                 .buttonStyle(.plain)

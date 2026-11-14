@@ -28,6 +28,17 @@ struct LinkPagesSheet: View {
 
     private var candidates: [LibraryItem] { model.linkCandidates }
 
+    /// The candidates by series, in the order the series first appear.
+    private var candidatesBySeries: [(series: String, items: [LibraryItem])] {
+        var order: [String] = []
+        var bySeries: [String: [LibraryItem]] = [:]
+        for item in candidates {
+            if bySeries[item.series] == nil { order.append(item.series) }
+            bySeries[item.series, default: []].append(item)
+        }
+        return order.map { ($0, bySeries[$0] ?? []) }
+    }
+
     private var chosenItem: LibraryItem? {
         itemID.flatMap { id in candidates.first { $0.id == id } }
     }
@@ -53,8 +64,20 @@ struct LinkPagesSheet: View {
             } else {
                 Form {
                     Picker("Comic", selection: $itemID) {
-                        ForEach(candidates) { item in
-                            Text(item.displayName).tag(Optional(item.id))
+                        // Under its series once there's more than one, so
+                        // two series' "Ch. 1" can't be mistaken for each other.
+                        if candidatesBySeries.count > 1 {
+                            ForEach(candidatesBySeries, id: \.series) { group in
+                                Section(group.series) {
+                                    ForEach(group.items) { item in
+                                        Text(item.displayName).tag(Optional(item.id))
+                                    }
+                                }
+                            }
+                        } else {
+                            ForEach(candidates) { item in
+                                Text(item.displayName).tag(Optional(item.id))
+                            }
                         }
                     }
                     TextField("Pages", text: $pagesText, prompt: Text("42 or 42–45"))

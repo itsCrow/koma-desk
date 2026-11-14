@@ -16,7 +16,7 @@ struct ProjectsBrowserView: View {
     private var groups: [(series: String, projects: [ProjectSummary])] {
         let words = projects.wordCounts
         return projects.groupedBySeries.compactMap { group in
-            let shown = group.projects.filter { HomeSearch.matches(model.homeSearch, $0.name, $0.series) }
+            let shown = group.projects.filter { HomeSearch.matches(model.homeSearch, $0.name, $0.seriesName) }
             return shown.isEmpty ? nil : (group.series, model.projectsSort.sorted(shown, words: words))
         }
     }
@@ -75,7 +75,7 @@ struct ProjectsBrowserView: View {
         }
         .glassButtonStyle(prominent: true)
         .disabled(model.library.isEmpty)
-        .help(model.library.isEmpty ? "Add a series to the library first — a project is about one series" : "New project (⇧⌘N)")
+        .help(model.library.isEmpty ? "Add a series to the library first — a project is about the series it cites" : "New project (⇧⌘N)")
     }
 
     private var sortMenu: some View {
@@ -190,7 +190,7 @@ private struct ProjectHero: View {
                     .foregroundStyle(Palette.textPrimary)
                     .lineLimit(2)
                     .padding(.top, 8)
-                Text(summary.series)
+                Text(summary.seriesName)
                     .font(Typography.heading)
                     .foregroundStyle(Palette.textSecondary)
                     .lineLimit(1)
@@ -532,7 +532,7 @@ private struct ProjectRow<Menu: View>: View {
             ProjectColumns(
                 name: Text(summary.name).font(.system(size: 13, weight: isOpen ? .semibold : .medium))
                     .foregroundColor(Palette.textPrimary),
-                series: Text(summary.series),
+                series: Text(summary.seriesName),
                 words: ringGlyph + Text(wordsText),
                 beats: Text(summary.beatsTotal > 0 ? "\(summary.beatsDone)/\(summary.beatsTotal)" : "—"),
                 citations: Text("\(summary.citationCount)"),

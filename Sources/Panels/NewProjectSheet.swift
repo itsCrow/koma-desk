@@ -8,7 +8,7 @@ struct NewProjectSheet: View {
     @Bindable var model: ReaderModel
 
     @State private var name = ""
-    @State private var seriesName = ""
+    @State private var chosenSeries: [String] = []
     @State private var targetWordCountText = ""
     @FocusState private var nameFocused: Bool
 
@@ -25,15 +25,7 @@ struct NewProjectSheet: View {
             }
 
             field("Series") {
-                Picker("", selection: $seriesName) {
-                    if seriesName.isEmpty {
-                        Text("None").tag("")
-                    }
-                    ForEach(model.library.series) { series in
-                        Text(series.name).tag(series.name)
-                    }
-                }
-                .labelsHidden()
+                SeriesChecklist(names: model.library.series.map(\.name), chosen: $chosenSeries)
             }
 
             field("Target Word Count") {
@@ -48,7 +40,7 @@ struct NewProjectSheet: View {
                 Button("Create", action: create)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || seriesName.isEmpty)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || chosenSeries.isEmpty)
             }
         }
         .padding(20)
@@ -72,21 +64,100 @@ struct NewProjectSheet: View {
         // page) wins outright; otherwise fall back to whatever's already
         // open. A library with nothing in it yet leaves this blank — there's
         // no series to pick.
-        seriesName = model.newProjectSeriesOverride
-            ?? model.series?.name
-            ?? model.browsingSeries
-            ?? model.project?.manifest.series
-            ?? model.library.series.first?.name
-            ?? ""
+        if let single = model.newProjectSeriesOverride ?? model.series?.name ?? model.browsingSeries {
+            chosenSeries = [single]
+        } else if let open = model.project?.manifest.series, !open.isEmpty {
+            chosenSeries = open
+        } else {
+            chosenSeries = model.library.series.first.map { [$0.name] } ?? []
+        }
         model.newProjectSeriesOverride = nil
         DispatchQueue.main.async { nameFocused = true }
     }
 
     private func create() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty, !seriesName.isEmpty else { return }
+        guard !trimmedName.isEmpty, !chosenSeries.isEmpty else { return }
         let target = Int(targetWordCountText.trimmingCharacters(in: .whitespaces))
         model.wantsNewProject = false
-        model.newProject(named: trimmedName, series: seriesName, targetWordCount: target)
+        model.newProject(named: trimmedName, series: chosenSeries, targetWordCount: target)
+    }
+}
+
+/// "Add Series to Project…": the library's series the open project isn't
+/// about yet, to tick and add.
+struct AddSeriesSheet: View {
+    @Bindable var model: ReaderModel
+    @State private var chosenSeries: [String] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add Series to Project")
+                .font(.system(size: 15, weight: .semibold))
+
+            let available = model.seriesNotInProject.map(\.name)
+            if available.isEmpty {
+                Text("Every series in your library is already in this project.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                SeriesChecklist(names: available, chosen: $chosenSeries)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { model.wantsAddSeries = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    for name in chosenSeries { model.addSeriesToProject(name) }
+                    model.wantsAddSeries = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(chosenSeries.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+        .onAppear { chosenSeries = [] }
+    }
+}
+
+/// A scrolling list of series with a checkbox each. `chosen` keeps the
+/// order they were ticked in, which is the order they join the project.
+private struct SeriesChecklist: View {
+    let names: [String]
+    @Binding var chosen: [String]
+
+    var body: some View {
+        if names.isEmpty {
+            Text("Your library has no series yet.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(names, id: \.self) { name in
+                        Toggle(name, isOn: binding(for: name))
+                            .toggleStyle(.checkbox)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+            }
+            .frame(maxHeight: 160)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    private func binding(for name: String) -> Binding<Bool> {
+        Binding(
+            get: { chosen.contains(name) },
+            set: { isOn in
+                if isOn, !chosen.contains(name) { chosen.append(name) }
+                if !isOn { chosen.removeAll { $0 == name } }
+            }
+        )
     }
 }

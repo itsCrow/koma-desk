@@ -8,7 +8,7 @@ struct SeriesView: View {
     let series: Series
 
     private var projects: [ProjectSummary] {
-        ProjectsSort.recent.sorted(model.projects.summaries.filter { $0.series == series.name }, words: [:])
+        ProjectsSort.recent.sorted(model.projects.summaries.filter { $0.series.contains(series.name) }, words: [:])
     }
 
     var body: some View {

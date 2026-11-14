@@ -366,10 +366,10 @@ struct ProjectStoreTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("Test.panelsproject", isDirectory: true)
 
-        var loaded = try ProjectStore.create(at: url, name: "Test", series: "Berserk")
+        var loaded = try ProjectStore.create(at: url, name: "Test", series: ["Berserk"])
         #expect(FileManager.default.fileExists(atPath: ProjectStore.capturesFolder(of: url).path))
         #expect(loaded.manifest.name == "Test")
-        #expect(loaded.manifest.series == "Berserk")
+        #expect(loaded.manifest.series == ["Berserk"])
         #expect(loaded.manifest.version == ProjectManifest.currentVersion)
 
         let item = ItemRef(itemID: "Berserk v01.cbz|42", filename: "Berserk v01.cbz", fileSize: 42,
@@ -392,6 +392,67 @@ struct ProjectStoreTests {
         #expect(back.script == loaded.script)
         #expect(back.manifest.citation(id: cite.id)?.panel == 3)
         #expect(back.manifest.item(id: item.itemID)?.volume == 1)
+    }
+
+    @Test("A project about several series saves them as a list and reads them back in order")
+    func multiSeriesRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Two.panelsproject", isDirectory: true)
+
+        let loaded = try ProjectStore.create(at: url, name: "Two", series: ["Berserk", "Vagabond", "Berserk", ""])
+        #expect(loaded.manifest.series == ["Berserk", "Vagabond"])
+        #expect(try ProjectStore.loadManifest(url).series == ["Berserk", "Vagabond"])
+        #expect(loaded.manifest.seriesDisplayName == "Berserk + Vagabond")
+
+        let raw = try String(contentsOf: ProjectStore.manifestURL(of: url), encoding: .utf8)
+        #expect(raw.contains("\"version\" : 8"))
+    }
+
+    @Test("A version-7 project's one series becomes a list of one")
+    func upgradesSingleSeries() throws {
+        let v7 = """
+        { "name" : "Eclipse", "series" : "Berserk", "version" : 7,
+          "items" : [], "citations" : [], "spans" : [], "beats" : [] }
+        """
+        let manifest = try ProjectStore.decodeManifest(Data(v7.utf8))
+        #expect(manifest.series == ["Berserk"])
+        #expect(manifest.version == ProjectManifest.currentVersion)
+    }
+
+    @Test("Citing a comic from another series adds that series, once")
+    func registerAddsSeries() {
+        var manifest = ProjectManifest(name: "T", series: ["Berserk"])
+        let vagabond = ItemRef(itemID: "vag01|1", filename: "Vagabond v01.cbz", fileSize: 1,
+                               series: "Vagabond", volume: 1, title: "Vol. 1")
+        manifest.register(vagabond)
+        manifest.register(vagabond)
+        #expect(manifest.series == ["Berserk", "Vagabond"])
+
+        // The label names the cited comic's series, not the project's first.
+        let citation = Citation(itemID: vagabond.itemID, pageIndex: 0, pageNumbers: [1], text: "Vagabond, Vol. 1, p. 1")
+        #expect(manifest.label(for: citation).series == "Vagabond")
+    }
+
+    @Test("A series still cited, or the last one left, can't be taken off")
+    func removeSeries() {
+        var manifest = ProjectManifest(name: "T", series: ["Berserk", "Vagabond", "Monster"])
+        let ref = ItemRef(itemID: "vag01|1", filename: "Vagabond v01.cbz", fileSize: 1, series: "Vagabond", title: "Vol. 1")
+        manifest.register(ref)
+        manifest.citations = [Citation(itemID: ref.itemID, pageIndex: 0, pageNumbers: [1], text: "Vagabond, p. 1")]
+
+        let removedCited = manifest.removeSeries("Vagabond")
+        let removedUncited = manifest.removeSeries("Monster")
+        #expect(!removedCited)
+        #expect(removedUncited)
+        #expect(manifest.series == ["Berserk", "Vagabond"])
+        manifest.citations = []
+        let removedOnceUncited = manifest.removeSeries("Vagabond")
+        let removedLast = manifest.removeSeries("Berserk")
+        #expect(removedOnceUncited)
+        #expect(!removedLast)
+        #expect(manifest.series == ["Berserk"])
     }
 
     @Test("A version-3 project opens and comes forward, keeping everything it had")
@@ -440,7 +501,7 @@ struct ProjectStoreTests {
         let manifest = try ProjectStore.loadManifest(url)
         #expect(manifest.version == ProjectManifest.currentVersion)
         #expect(manifest.name == "turtle school")
-        #expect(manifest.series == "Dragon Ball + Super")
+        #expect(manifest.series == ["Dragon Ball + Super"])
         #expect(manifest.citations.count == 1)
         #expect(manifest.citations[0].id == "enzyk7")
         #expect(manifest.citations[0].panel == 5)
@@ -456,7 +517,7 @@ struct ProjectStoreTests {
             .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("Spans.panelsproject", isDirectory: true)
-        var loaded = try ProjectStore.create(at: url, name: "Spans", series: "Berserk")
+        var loaded = try ProjectStore.create(at: url, name: "Spans", series: ["Berserk"])
 
         let span = PageSpan(id: "k7m2pq", itemID: "b.cbz|5", firstPageIndex: 11,
                             pageNumbers: [12, 17], text: "Berserk, Vol. 1, pp. 12–17",
@@ -485,7 +546,7 @@ struct ProjectStoreTests {
             .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("Beats.panelsproject", isDirectory: true)
-        var loaded = try ProjectStore.create(at: url, name: "Beats", series: "Berserk")
+        var loaded = try ProjectStore.create(at: url, name: "Beats", series: ["Berserk"])
 
         let beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
         loaded.manifest.store(beat)
@@ -516,7 +577,7 @@ struct ProjectStoreTests {
             .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("Tags.panelsproject", isDirectory: true)
-        var loaded = try ProjectStore.create(at: url, name: "Tags", series: "Berserk")
+        var loaded = try ProjectStore.create(at: url, name: "Tags", series: ["Berserk"])
 
         var beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
         beat.tags = [
@@ -563,7 +624,7 @@ struct ProjectStoreTests {
             .appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("Color.panelsproject", isDirectory: true)
-        var loaded = try ProjectStore.create(at: url, name: "Color", series: "Berserk")
+        var loaded = try ProjectStore.create(at: url, name: "Color", series: ["Berserk"])
 
         var beat = Beat(id: "k7m2pq", title: "Cold Open", date: Date(timeIntervalSince1970: 0))
         #expect(beat.color == nil)
@@ -652,8 +713,8 @@ struct ProjectStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        _ = try ProjectStore.create(at: root.appendingPathComponent("A.panelsproject"), name: "A", series: "S")
-        _ = try ProjectStore.create(at: root.appendingPathComponent("B.panelsproject"), name: "B", series: "S")
+        _ = try ProjectStore.create(at: root.appendingPathComponent("A.panelsproject"), name: "A", series: ["S"])
+        _ = try ProjectStore.create(at: root.appendingPathComponent("B.panelsproject"), name: "B", series: ["S"])
         // Things that look like projects but aren't.
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Empty.panelsproject"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Folder"), withIntermediateDirectories: true)
@@ -675,7 +736,7 @@ struct ProjectStoreTests {
 
         let first = ProjectStore.uniqueURL(named: "Eclipse", in: root)
         #expect(first.lastPathComponent == "Eclipse.panelsproject")
-        _ = try ProjectStore.create(at: first, name: "Eclipse", series: "Berserk")
+        _ = try ProjectStore.create(at: first, name: "Eclipse", series: ["Berserk"])
         #expect(ProjectStore.uniqueURL(named: "Eclipse", in: root).lastPathComponent == "Eclipse 2.panelsproject")
         #expect(ProjectStore.uniqueURL(named: "Ch: 1/2", in: root).lastPathComponent == "Ch 12.panelsproject")
         #expect(ProjectStore.uniqueURL(named: "   ", in: root).lastPathComponent == "Untitled.panelsproject")
@@ -750,7 +811,7 @@ struct ProjectStoreTests {
 
     @Test("Long labels are split, so the pages never get truncated away")
     func referenceLabels() {
-        var manifest = ProjectManifest(name: "T", series: "Dragon Ball + Super")
+        var manifest = ProjectManifest(name: "T", series: ["Dragon Ball + Super"])
         manifest.register(ItemRef(itemID: "ch28|1", filename: "Chapter 028.cbr", fileSize: 1,
                                   series: "Dragon Ball + Super", chapter: 28, title: "Ch. 28 · Training Begins!!"))
         manifest.register(ItemRef(itemID: "v01|1", filename: "Berserk v01.cbz", fileSize: 1,

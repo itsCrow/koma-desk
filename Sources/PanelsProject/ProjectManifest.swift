@@ -178,10 +178,9 @@ public struct Beat: Codable, Equatable, Sendable, Identifiable {
 ///
 /// Stored labels read "Dragon Ball + Super, Ch. 28, pp. 12–17, panel 5",
 /// which is right on the clipboard and in an export, where nothing else says
-/// what the comic is. In the app it's mostly redundant — a project is about
-/// one series — and long enough to truncate, which loses the pages, the one
-/// part that matters. So the parts are kept separate and each view shows what
-/// it has room for.
+/// what the comic is. In the app the whole thing is long enough to truncate,
+/// which loses the pages, the one part that matters. So the parts are kept
+/// separate and each view shows what it has room for.
 public struct ReferenceLabel: Equatable, Sendable {
     /// "pp. 12–17", "p. 117, panel 3".
     public var pages: String
@@ -224,11 +223,12 @@ public struct ReferenceLabel: Equatable, Sendable {
 }
 
 /// Everything about a project except the script itself. A project is about
-/// one series; reading positions belong to the library, not to it.
+/// one or more series; reading positions belong to the library, not to it.
 public struct ProjectManifest: Codable, Equatable, Sendable {
-    /// 7 since a beat can carry its own color — see `Beat.color`. 6 is
-    /// still read, and upgraded on the next save.
-    public static let currentVersion = 7
+    /// 8 since a project can be about more than one series — `series` is a
+    /// list. 3 to 7, with one series as a string, are still read, and
+    /// upgraded on the next save.
+    public static let currentVersion = 8
     /// The oldest format still understood. Older than this is refused rather
     /// than half-read, because its citations point at things by names this
     /// version doesn't know.
@@ -236,8 +236,9 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
 
     public var version: Int
     public var name: String
-    /// The series the script is about — "Berserk", "Dragon Ball + Super".
-    public var series: String
+    /// The series the script is about — "Berserk", "Dragon Ball + Super" —
+    /// in the order they joined the project.
+    public var series: [String]
     /// The items cited so far, in the order they were first cited.
     public var items: [ItemRef]
     public var citations: [Citation]
@@ -250,11 +251,11 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
     /// against.
     public var targetWordCount: Int?
 
-    public init(name: String, series: String, items: [ItemRef] = [], citations: [Citation] = [],
+    public init(name: String, series: [String], items: [ItemRef] = [], citations: [Citation] = [],
                 spans: [PageSpan] = [], beats: [Beat] = [], targetWordCount: Int? = nil) {
         self.version = Self.currentVersion
         self.name = name
-        self.series = series
+        self.series = Self.unique(series)
         self.items = items
         self.citations = citations
         self.spans = spans
@@ -269,12 +270,17 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
     /// Written by hand because the synthesized decoder does not fall back to a
     /// property's default — it throws. A version-3 project has no `spans` key
     /// at all, and a version-4 one has no `beats` key, and each has to open;
-    /// older projects have no `targetWordCount` either.
+    /// older projects have no `targetWordCount` either. Before version 8,
+    /// `series` was one string.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(Int.self, forKey: .version)
         name = try container.decode(String.self, forKey: .name)
-        series = try container.decode(String.self, forKey: .series)
+        if let list = try? container.decode([String].self, forKey: .series) {
+            series = Self.unique(list)
+        } else {
+            series = [try container.decode(String.self, forKey: .series)]
+        }
         items = try container.decodeIfPresent([ItemRef].self, forKey: .items) ?? []
         citations = try container.decodeIfPresent([Citation].self, forKey: .citations) ?? []
         spans = try container.decodeIfPresent([PageSpan].self, forKey: .spans) ?? []
@@ -326,12 +332,49 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
 
     public func label(for citation: Citation) -> ReferenceLabel {
         ReferenceLabel(pages: ReferenceLabel.pagePhrase(citation.pageNumbers, panel: citation.panel),
-                       item: itemLabel(citation.itemID), series: series, full: citation.text)
+                       item: itemLabel(citation.itemID), series: seriesName(of: citation.itemID), full: citation.text)
     }
 
     public func label(for span: PageSpan) -> ReferenceLabel {
         ReferenceLabel(pages: ReferenceLabel.pagePhrase(span.pageNumbers),
-                       item: itemLabel(span.itemID), series: series, full: span.text)
+                       item: itemLabel(span.itemID), series: seriesName(of: span.itemID), full: span.text)
+    }
+
+    /// The series an item belongs to. An item never registered falls back to
+    /// the project's only series, when it has just the one.
+    private func seriesName(of itemID: String) -> String {
+        item(id: itemID)?.series ?? (series.count == 1 ? series[0] : "")
+    }
+
+    /// "Berserk + Vagabond" — every series, for a heading or a list row.
+    public var seriesDisplayName: String { series.joined(separator: " + ") }
+
+    /// Adds a series, if it isn't already one of the project's.
+    public mutating func addSeries(_ name: String) {
+        guard !name.isEmpty, !series.contains(name) else { return }
+        series.append(name)
+    }
+
+    /// Whether anything in the project points at a comic of this series.
+    public func isCited(_ seriesName: String) -> Bool {
+        let ids = Set(items.filter { $0.series == seriesName }.map(\.itemID))
+        return citations.contains { ids.contains($0.itemID) } || spans.contains { ids.contains($0.itemID) }
+    }
+
+    /// Takes a series off the project. Refused, returning false, while a
+    /// citation or a page range still points at one of its comics, or when
+    /// it is the last series left.
+    @discardableResult
+    public mutating func removeSeries(_ name: String) -> Bool {
+        guard series.contains(name), series.count > 1, !isCited(name) else { return false }
+        series.removeAll { $0 == name }
+        items.removeAll { $0.series == name }
+        return true
+    }
+
+    private static func unique(_ names: [String]) -> [String] {
+        var seen = Set<String>()
+        return names.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     /// How a volume or chapter is named on its own, without the series.
@@ -342,8 +385,10 @@ public struct ProjectManifest: Codable, Equatable, Sendable {
         return ref.title.isEmpty ? nil : ref.title
     }
 
-    /// Adds an item the first time it's cited.
+    /// Adds an item the first time it's cited, and its series, if the
+    /// project wasn't about that series yet.
     public mutating func register(_ ref: ItemRef) {
+        addSeries(ref.series)
         guard item(id: ref.itemID) == nil else { return }
         items.append(ref)
     }

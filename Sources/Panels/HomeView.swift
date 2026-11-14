@@ -252,7 +252,7 @@ private struct HomeSidebar: View {
     /// same way it narrows the rest of home.
     private var recentProjects: [ProjectSummary] {
         let sorted = ProjectsSort.recent.sorted(model.projects.summaries, words: [:])
-        let matched = sorted.filter { HomeSearch.matches(model.homeSearch, $0.name, $0.series) }
+        let matched = sorted.filter { HomeSearch.matches(model.homeSearch, $0.name, $0.seriesName) }
         return Array(matched.prefix(5))
     }
 }

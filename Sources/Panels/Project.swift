@@ -48,7 +48,7 @@ final class Project {
         self.script = loaded.script
     }
 
-    static func create(at url: URL, series: String) throws -> Project {
+    static func create(at url: URL, series: [String]) throws -> Project {
         let name = url.deletingPathExtension().lastPathComponent
         return Project(url: url, loaded: try ProjectStore.create(at: url, name: name, series: series))
     }

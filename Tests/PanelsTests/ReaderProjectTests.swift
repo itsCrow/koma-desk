@@ -47,7 +47,7 @@ struct ReaderProjectTests {
         /// A project folder about `series`, made directly rather than
         /// through the reader.
         func project(named name: String, series: String) throws -> Project {
-            let url = try projects.create(named: name, series: series)
+            let url = try projects.create(named: name, series: [series])
             return try Project.open(url)
         }
     }
@@ -69,7 +69,7 @@ struct ReaderProjectTests {
         defer { scratch.tearDown() }
 
         func make(_ name: String, series: String, cites title: String?, editedSecondsAgo: Double) throws {
-            let url = try scratch.projects.create(named: name, series: series)
+            let url = try scratch.projects.create(named: name, series: [series])
             var loaded = try ProjectStore.load(url)
             if let title {
                 loaded.manifest.register(ItemRef(itemID: "\(title).cbz|1", filename: "\(title).cbz", fileSize: 1, series: series, title: title))
@@ -98,13 +98,13 @@ struct ReaderProjectTests {
         defer { scratch.tearDown() }
         let projects = scratch.projects
 
-        let url = try projects.create(named: "Draft", series: "Berserk")
+        let url = try projects.create(named: "Draft", series: ["Berserk"])
         #expect(projects.summaries.map(\.name) == ["Draft"])
 
         let renamed = try projects.rename(url, to: "Final")
         #expect(renamed.lastPathComponent == "Final.panelsproject")
         #expect(try ProjectStore.loadManifest(renamed).name == "Final")
-        #expect(try ProjectStore.loadManifest(renamed).series == "Berserk")
+        #expect(try ProjectStore.loadManifest(renamed).series == ["Berserk"])
         #expect(projects.summaries.map(\.name) == ["Final"])
 
         let copy = try projects.duplicate(renamed)
@@ -122,6 +122,32 @@ struct ReaderProjectTests {
         scratch.model.newProject(named: "Nothing")
         #expect(scratch.model.project == nil)
         #expect(scratch.model.errorMessage != nil)
+    }
+
+    @Test("A project can be about several series, and picks up another when one is cited")
+    func multiSeriesProject() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+
+        model.newProject(named: "Swords", series: ["Berserk", "Vagabond"])
+        let project = try #require(model.project)
+        #expect(project.manifest.series == ["Berserk", "Vagabond"])
+        #expect(model.missingSeries == ["Berserk", "Vagabond"])
+        #expect(model.landingSeries(for: project.manifest) == nil)
+
+        model.addSeriesToProject("Vagabond")
+        model.addSeriesToProject("Monster")
+        #expect(project.manifest.series == ["Berserk", "Vagabond", "Monster"])
+
+        let item = LibraryItem(url: URL(fileURLWithPath: "/tmp/Vinland Saga v01.cbz"), series: "Vinland Saga",
+                               volume: 1, chapter: nil, title: "Vinland Saga v01", arc: nil, fileSize: 1)
+        model.beginLinkingPages()
+        let request = try #require(model.linkingPages)
+        model.finishLinkingPages(request, item: item, pages: 3...4)
+        #expect(project.manifest.series == ["Berserk", "Vagabond", "Monster", "Vinland Saga"])
+        let span = try #require(project.manifest.spans.first)
+        #expect(project.manifest.label(for: span).series == "Vinland Saga")
     }
 
     // MARK: - Reading through the library
@@ -281,8 +307,8 @@ struct ReaderProjectTests {
         // A project made while reading is about this series.
         model.newProject(named: "Arc")
         let project = try #require(model.project)
-        #expect(project.manifest.series == series.name)
-        #expect(scratch.projects.summaries.map(\.series) == [series.name])
+        #expect(project.manifest.series == [series.name])
+        #expect(scratch.projects.summaries.map(\.series) == [[series.name]])
 
         // Picking the series up again lands on the chapter last read.
         model.closeComic()
@@ -307,7 +333,7 @@ struct ReaderProjectTests {
 
         model.newProject(named: "First")
         let first = try #require(model.project)
-        #expect(first.manifest.series == series.name)
+        #expect(first.manifest.series == [series.name])
         first.script = "The first script."
         model.goTo(spread: 7)
 
@@ -350,11 +376,11 @@ struct ReaderProjectTests {
         let project = try scratch.project(named: "Elsewhere", series: seriesName)
         model.openProject(at: project.url)
         #expect(model.project?.name == "Elsewhere")
-        #expect(model.missingSeries == seriesName)
+        #expect(model.missingSeries == [seriesName])
         #expect(!model.hasComic)
 
         scratch.library.addRoot(file)
-        #expect(model.missingSeries == nil)
+        #expect(model.missingSeries.isEmpty)
         // Nothing to capture into without pages; nothing opened by itself.
         #expect(!model.hasComic)
         model.read(try #require(scratch.library.series(named: seriesName)))
@@ -413,7 +439,7 @@ struct ReaderProjectTests {
     func jumpLeavesFocusedWriting() throws {
         let scratch = try Scratch()
         defer { scratch.tearDown() }
-        let url = try scratch.projects.create(named: "Jumping", series: "Berserk")
+        let url = try scratch.projects.create(named: "Jumping", series: ["Berserk"])
         scratch.model.openProject(at: url)
         let project = try #require(scratch.model.project)
 
@@ -828,7 +854,7 @@ struct ReaderProjectTests {
     private func editor(script: String, in scratch: Scratch) throws -> (ScriptEditorView.Coordinator, ScriptTextView, Project) {
         // Opened through the model, so the reader and the editor are working on
         // the same project — the toggle asks the model for it.
-        let url = try scratch.projects.create(named: "Editing", series: "Berserk")
+        let url = try scratch.projects.create(named: "Editing", series: ["Berserk"])
         scratch.model.openProject(at: url)
         let project = try #require(scratch.model.project)
         project.script = script

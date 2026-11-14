@@ -112,6 +112,9 @@ struct PanelsApp: App {
                     .disabled(model.project == nil)
                 Button("Reveal Project in Finder") { model.revealProject() }
                     .disabled(model.project == nil)
+                Divider()
+                Button("Add Series to Project…") { model.requestAddSeries() }
+                    .disabled(model.project == nil)
             }
 
             CommandMenu("Tools") {

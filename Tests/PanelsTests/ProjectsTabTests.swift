@@ -7,7 +7,7 @@ import PanelsProject
 @MainActor
 struct ProjectsTabTests {
     private func summary(_ name: String, opened: TimeInterval? = nil, edited: TimeInterval? = nil) -> ProjectSummary {
-        ProjectSummary(url: URL(fileURLWithPath: "/tmp/\(name).panelsproject"), name: name, series: "Berserk",
+        ProjectSummary(url: URL(fileURLWithPath: "/tmp/\(name).panelsproject"), name: name, series: ["Berserk"],
                        items: [], citationCount: 0, edited: edited.map(Date.init(timeIntervalSince1970:)),
                        lastOpened: opened.map(Date.init(timeIntervalSince1970:)), picture: nil, isElsewhere: false)
     }
@@ -34,12 +34,31 @@ struct ProjectsTabTests {
         #expect(ProjectsSort.words.sorted([c, a, d, b], words: counts).map(\.name) == ["Bravo", "Alpha", "Delta", "Charlie"])
     }
 
+    @Test("A project about several series is listed once, under all of them together")
+    func multiSeriesGrouping() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = ProjectLibrary(root: root, defaults: UserDefaults(suiteName: "PanelsTests-\(UUID().uuidString)")!)
+        _ = try library.create(named: "Swords", series: ["Berserk", "Vagabond"])
+        _ = try library.create(named: "Eclipse", series: ["Berserk"])
+
+        let groups = library.groupedBySeries
+        #expect(Set(groups.map(\.series)) == ["Berserk", "Berserk + Vagabond"])
+        #expect(groups.flatMap(\.projects).count == 2)
+
+        // A series' own page shows every project that includes it.
+        let aboutBerserk = library.summaries.filter { $0.series.contains("Berserk") }.map(\.name)
+        let aboutVagabond = library.summaries.filter { $0.series.contains("Vagabond") }.map(\.name)
+        #expect(Set(aboutBerserk) == ["Swords", "Eclipse"])
+        #expect(aboutVagabond == ["Swords"])
+    }
+
     @Test("A summary carries the word goal and how many beats are done")
     func summaryStats() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let library = ProjectLibrary(root: root, defaults: UserDefaults(suiteName: "PanelsTests-\(UUID().uuidString)")!)
-        let url = try library.create(named: "Eclipse", series: "Berserk", targetWordCount: 2000)
+        let url = try library.create(named: "Eclipse", series: ["Berserk"], targetWordCount: 2000)
         var loaded = try ProjectStore.load(url)
         loaded.manifest.beats = [Beat(title: "Cold open", isDone: true), Beat(title: "The brand"), Beat(title: "After", isDone: true)]
         loaded.script = "> A note, not narration.\nGuts raises the sword.\n# Heading here"
@@ -57,7 +76,7 @@ struct ProjectsTabTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("PanelsTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let library = ProjectLibrary(root: root, defaults: UserDefaults(suiteName: "PanelsTests-\(UUID().uuidString)")!)
-        let url = try library.create(named: "Eclipse", series: "Berserk")
+        let url = try library.create(named: "Eclipse", series: ["Berserk"])
         var loaded = try ProjectStore.load(url)
         loaded.script = "> A note, not narration.\nGuts raises the sword.\n# Heading here"
         try ProjectStore.save(loaded, to: url)

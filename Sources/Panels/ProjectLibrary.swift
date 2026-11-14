@@ -9,7 +9,7 @@ struct ProjectSummary: Identifiable, Equatable {
     let url: URL
     let name: String
     /// "Berserk", "Dragon Ball + Super" — what the script is about.
-    let series: String
+    let series: [String]
     /// The volumes or chapters cited so far.
     let items: [String]
     let citationCount: Int
@@ -30,6 +30,9 @@ struct ProjectSummary: Identifiable, Equatable {
 
     /// When it was last worked on: opened here, or failing that, saved.
     var recency: Date { lastOpened ?? edited ?? .distantPast }
+
+    /// "Berserk", or "Berserk + Vagabond" for a project about more than one.
+    var seriesName: String { series.joined(separator: " + ") }
 }
 
 /// What a project's script shows before it's opened: its first lines, for
@@ -212,12 +215,14 @@ final class ProjectLibrary {
     var wordCounts: [URL: Int] { previews.mapValues(\.words) }
 
     /// Series in order of their most recently edited project; within a
-    /// series, most recent first. Projects from outside the folder come last,
-    /// under their own heading.
+    /// series, most recent first. A project about several series is grouped
+    /// under all of them together — "Berserk + Vagabond" — so it's listed
+    /// once. Projects from outside the folder come last, under their own
+    /// heading.
     var groupedBySeries: [(series: String, projects: [ProjectSummary])] {
         func newest(_ projects: [ProjectSummary]) -> Date { projects.compactMap(\.edited).max() ?? .distantPast }
         let local = summaries.filter { !$0.isElsewhere }
-        var groups = Dictionary(grouping: local, by: \.series).map { series, projects in
+        var groups = Dictionary(grouping: local, by: \.seriesName).map { series, projects in
             (series: series, projects: projects.sorted { ($0.edited ?? .distantPast) > ($1.edited ?? .distantPast) })
         }
         groups.sort { newest($0.projects) > newest($1.projects) }
@@ -235,7 +240,7 @@ final class ProjectLibrary {
     // MARK: - Changing the folder
 
     /// A new, empty project about `series`.
-    func create(named name: String, series: String, targetWordCount: Int? = nil) throws -> URL {
+    func create(named name: String, series: [String], targetWordCount: Int? = nil) throws -> URL {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let url = ProjectStore.uniqueURL(named: name, in: root)
         _ = try ProjectStore.create(at: url, name: url.deletingPathExtension().lastPathComponent, series: series,

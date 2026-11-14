@@ -195,6 +195,8 @@ final class ReaderModel {
     /// Set by a caller that already knows which series the new project is
     /// about — read once by the dialog, then irrelevant until set again.
     var newProjectSeriesOverride: String?
+    /// "Add Series to Project…" is showing its picker.
+    var wantsAddSeries = false
     /// The library's import bar should take focus.
     /// "Import from Link…" is showing its sheet.
     var isImportingLink = false
@@ -932,21 +934,25 @@ final class ReaderModel {
         isImportingLink = true
     }
 
-    /// A new project about a series, opened. Made from the series' page, or
-    /// from the projects list with a series chosen; with nothing chosen, the
-    /// series being read.
-    func newProject(named name: String, series seriesName: String? = nil, targetWordCount: Int? = nil) {
-        guard let seriesName = seriesName ?? series?.name ?? project?.manifest.series else {
-            errorMessage = "A project is about one series. Add its comics to the library, then make the project from the series’ page."
+    /// A new project about one or more series, opened. Made from the series'
+    /// page, or from the projects list with series chosen; with nothing
+    /// chosen, the series being read.
+    func newProject(named name: String, series seriesNames: [String] = [], targetWordCount: Int? = nil) {
+        let chosen = seriesNames.isEmpty
+            ? (series.map { [$0.name] } ?? project?.manifest.series ?? [])
+            : seriesNames
+        guard !chosen.isEmpty else {
+            errorMessage = "A project needs a series to be about. Add its comics to the library, then make the project from the series’ page."
             return
         }
         do {
-            let url = try projects.create(named: name, series: seriesName, targetWordCount: targetWordCount)
+            let url = try projects.create(named: name, series: chosen, targetWordCount: targetWordCount)
             closeProject()
             adopt(try Project.open(url))
             projects.noteLastOpened(url)
             showsHome = false
-            if series?.name != seriesName, let found = library.series(named: seriesName) {
+            if series.map({ !chosen.contains($0.name) }) ?? true,
+               let found = chosen.lazy.compactMap({ self.library.series(named: $0) }).first {
                 read(found)
             }
         } catch {
@@ -954,8 +960,22 @@ final class ReaderModel {
         }
     }
 
+    /// The series a project should open on: the one its writing last
+    /// pointed at, or else the first it's about that this library has.
+    func landingSeries(for manifest: ProjectManifest) -> Series? {
+        let recent = (manifest.spans.map { ($0.date, $0.itemID) }
+                      + manifest.citations.map { ($0.date, $0.itemID) })
+            .sorted { $0.0 > $1.0 }
+        for (_, itemID) in recent {
+            if let name = manifest.item(id: itemID)?.series, let found = library.series(named: name) {
+                return found
+            }
+        }
+        return manifest.series.lazy.compactMap { self.library.series(named: $0) }.first
+    }
+
     /// Another project takes the place of this one. Its series comes up where
-    /// it was last read — unless that's the series already on screen, in
+    /// it was last read — unless one of its series is already on screen, in
     /// which case the pages stay exactly where they are and only the script
     /// changes.
     func switchTo(_ url: URL) {
@@ -971,7 +991,8 @@ final class ReaderModel {
             projects.noteLastOpened(url)
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             showsHome = false
-            if series?.name != next.manifest.series, let found = library.series(named: next.manifest.series) {
+            if series.map({ !next.manifest.series.contains($0.name) }) ?? true,
+               let found = landingSeries(for: next.manifest) {
                 read(found)
             }
         } catch {
@@ -1035,11 +1056,30 @@ final class ReaderModel {
         clearFocus()
     }
 
-    /// The open project's series, when the library hasn't got it — the
-    /// editor's Mac, before they've added the folder.
-    var missingSeries: String? {
-        guard let project, library.series(named: project.manifest.series) == nil else { return nil }
-        return project.manifest.series
+    /// The open project's series the library hasn't got — the editor's Mac,
+    /// before they've added the folders.
+    var missingSeries: [String] {
+        guard let project else { return [] }
+        return project.manifest.series.filter { library.series(named: $0) == nil }
+    }
+
+    /// Library series the open project isn't about yet.
+    var seriesNotInProject: [Series] {
+        guard let project else { return [] }
+        return library.series.filter { !project.manifest.series.contains($0.name) }
+    }
+
+    func requestAddSeries() {
+        guard project != nil else { return }
+        wantsAddSeries = true
+    }
+
+    /// Makes the open project about another series too.
+    func addSeriesToProject(_ name: String) {
+        guard let project else { return }
+        project.manifest.addSeries(name)
+        projects.refresh()
+        lastCaptureMessage = "Added \(name) to the project"
     }
 
     /// A shot picked from the list: go to its page, and show where it sits
@@ -1339,11 +1379,11 @@ final class ReaderModel {
             pages: pages.replacingOccurrences(of: "pp. ", with: "").replacingOccurrences(of: "p. ", with: ""))
     }
 
-    /// The comics a range can point at: the project's series, and whatever
-    /// is open if it's from somewhere else.
+    /// The comics a range can point at: every series in the project, and
+    /// whatever is open if it's from somewhere else.
     var linkCandidates: [LibraryItem] {
         guard let project else { return [] }
-        var items = library.series(named: project.manifest.series)?.items ?? []
+        var items = project.manifest.series.flatMap { library.series(named: $0)?.items ?? [] }
         if let item, !items.contains(where: { $0.id == item.id }) { items.insert(item, at: 0) }
         return items
     }

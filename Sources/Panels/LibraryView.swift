@@ -25,8 +25,8 @@ struct LibraryView: View {
         // No page title: the covers are the page.
         return HomeScroll(header: { HomeControlsRow { controls } }) {
             VStack(alignment: .leading, spacing: 28) {
-                if let missing = model.missingSeries {
-                    MissingSeriesNotice(series: missing) { library.presentAddPanel() }
+                if !model.missingSeries.isEmpty {
+                    MissingSeriesNotice(series: model.missingSeries) { library.presentAddPanel() }
                 }
                 if shown.isEmpty {
                     ContentUnavailableView.search(text: model.homeSearch)
@@ -72,8 +72,8 @@ struct LibraryView: View {
     private var empty: some View {
         EmptyStateView(icon: "books.vertical", title: "Your library is empty",
                        subtitle: "Paste a link to pull in a series, or add comics you already have.") {
-            if let missing = model.missingSeries {
-                Text("The open project is about \(missing).")
+            if !model.missingSeries.isEmpty {
+                Text("The open project is about \(MissingSeriesNotice.list(model.missingSeries)).")
                     .font(Typography.body)
                     .foregroundStyle(Palette.textSecondary)
             }
@@ -92,18 +92,30 @@ struct LibraryView: View {
 
 // MARK: - Pieces
 
-/// The open project's series isn't here — the editor's Mac, before they've
-/// added the folder.
+/// Some of the open project's series aren't here — the editor's Mac, before
+/// they've added the folders.
 struct MissingSeriesNotice: View {
-    let series: String
+    let series: [String]
     let add: () -> Void
+
+    /// "Berserk", "Berserk and Vagabond", "Berserk, Vagabond and Monster".
+    static func list(_ names: [String]) -> String {
+        guard let last = names.last else { return "" }
+        guard names.count > 1 else { return last }
+        return names.dropLast().joined(separator: ", ") + " and " + last
+    }
+
+    /// "This project is about Berserk, which isn’t in your library".
+    static func sentence(_ names: [String]) -> String {
+        "This project is about \(list(names)), which \(names.count == 1 ? "isn’t" : "aren’t") in your library"
+    }
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "questionmark.folder")
                 .font(.system(size: 18))
             VStack(alignment: .leading, spacing: 2) {
-                Text("This project is about \(series), which isn’t in your library")
+                Text(Self.sentence(series))
                     .font(.system(size: 13, weight: .semibold))
                 Text("Add the folder holding its comics. They have to be the same files — a different release has different pages.")
                     .font(.system(size: 12))
