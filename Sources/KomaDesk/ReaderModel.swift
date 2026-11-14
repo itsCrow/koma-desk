@@ -1588,7 +1588,7 @@ final class ReaderModel {
             // Long enough to spot, short enough not to sit over the page
             // while the writer goes back to typing. Clicking the chip again
             // shows it again.
-            try? await Task.sleep(for: .seconds(1.2))
+            try? await Task.sleep(for: .seconds(0.5))
             guard !Task.isCancelled else { return }
             self?.focusOutlines = [:]
         }
