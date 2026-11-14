@@ -29,15 +29,7 @@ struct SeriesContentsView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close the comic")
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(series.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(series.summary)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
+                seriesTitle
                 Spacer()
                 Button { isReversed.toggle() } label: {
                     Image(systemName: isReversed ? "arrow.up" : "arrow.down")
@@ -97,6 +89,67 @@ struct SeriesContentsView: View {
             }
         }
         .background(Color(white: 0.08))
+    }
+
+    /// The series' name — and, when there's another series to go to, a
+    /// menu of them, so swapping doesn't mean a trip home.
+    @ViewBuilder
+    private var seriesTitle: some View {
+        let switchable = model.switchableSeries
+        let label = VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text(series.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if !switchable.inProject.isEmpty || !switchable.others.isEmpty {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
+            Text(series.summary)
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        if switchable.inProject.isEmpty && switchable.others.isEmpty {
+            label
+        } else {
+            Menu {
+                SwitchSeriesItems(model: model, switchable: switchable)
+            } label: {
+                label.contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Switch to another series at the same chapter and page")
+        }
+    }
+}
+
+/// The series the reader can swap to: the project's first, then the rest
+/// of the library. Shared by the contents' title menu and Go ▸ Switch Series.
+struct SwitchSeriesItems: View {
+    let model: ReaderModel
+    let switchable: (inProject: [Series], others: [Series])
+
+    var body: some View {
+        if !switchable.inProject.isEmpty {
+            Section("In This Project") {
+                ForEach(switchable.inProject) { series in
+                    Button(series.name) { model.switchSeries(to: series) }
+                }
+            }
+        }
+        if !switchable.others.isEmpty {
+            Section(switchable.inProject.isEmpty ? "Library" : "Other Series") {
+                ForEach(switchable.others) { series in
+                    Button(series.name) { model.switchSeries(to: series) }
+                }
+            }
+        }
     }
 }
 

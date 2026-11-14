@@ -62,8 +62,11 @@ enum ReadingOrientation: String, CaseIterable {
 }
 
 /// Where to land when the next item opens as part of reading straight through.
-enum ItemStart {
+enum ItemStart: Equatable {
     case beginning, end
+    /// A one-based page — the same page, swapping to another series' copy
+    /// of a chapter. Past the end lands on the last page.
+    case page(Int)
 }
 
 /// What a capture covers.
@@ -633,6 +636,8 @@ final class ReaderModel {
         switch pendingStart {
         case .beginning: spreadIndex = 0
         case .end: spreadIndex = max(spreads.count - 1, 0)
+        case .page(let page):
+            spreadIndex = spreadIndex(containingPage: min(max(page, 1), pages.count) - 1) ?? 0
         case nil: spreadIndex = min(max(restored, 0), max(spreads.count - 1, 0))
         }
         isRestoringPosition = false
@@ -800,6 +805,59 @@ final class ReaderModel {
         guard let index = currentItemIndex, index > 0 else { return }
         pendingStart = landingAtEnd ? .end : .beginning
         open(item: seriesItems[index - 1])
+    }
+
+    // MARK: - Switching series
+
+    /// Where the reader can swap to: the open project's other series, in
+    /// the project's order, then the rest of the library. Never the series
+    /// on screen, nor a series this library hasn't got.
+    var switchableSeries: (inProject: [Series], others: [Series]) {
+        let current = series?.name
+        let projectNames = project?.manifest.series ?? []
+        let inProject = projectNames.filter { $0 != current }.compactMap { library.series(named: $0) }
+        let others = library.series.filter { $0.name != current && !projectNames.contains($0.name) }
+        return (inProject, others)
+    }
+
+    /// Reading the same thing in another series — One Piece (Colored) to
+    /// One Piece: the same chapter or volume at the same page. A series
+    /// without that chapter opens where it was left instead.
+    func switchSeries(to target: Series) {
+        guard target.name != series?.name, !isLoading else { return }
+        guard let current = item, hasComic, let match = target.matchingItem(for: current) else {
+            if let current = item {
+                lastCaptureMessage = "No \(current.label) in \(target.name), opened where you left it"
+            }
+            read(target)
+            return
+        }
+        showsHome = false
+        pendingStart = .page(currentPageNumber)
+        open(item: match)
+        lastCaptureMessage = "\(match.label) in \(target.name)"
+    }
+
+    /// The project's series this library has, in the project's order.
+    private var projectSeriesHere: [Series] {
+        (project?.manifest.series ?? []).compactMap { library.series(named: $0) }
+    }
+
+    /// Whether ⌃⌘S has somewhere to go.
+    var canSwitchToNextProjectSeries: Bool {
+        projectSeriesHere.contains { $0.name != series?.name }
+    }
+
+    /// ⌃⌘S: the project's next series, wrapping round — with two, one key
+    /// flips between them.
+    func switchToNextProjectSeries() {
+        let ordered = projectSeriesHere
+        guard !ordered.isEmpty else { return }
+        let start = ordered.firstIndex { $0.name == series?.name }.map { $0 + 1 } ?? 0
+        let next = (0..<ordered.count).lazy
+            .map { ordered[(start + $0) % ordered.count] }
+            .first { $0.name != self.series?.name }
+        if let next { switchSeries(to: next) }
     }
 
     /// Back to the series' page on the home screen.

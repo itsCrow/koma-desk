@@ -136,6 +136,28 @@ public struct Series: Codable, Equatable, Sendable, Identifiable {
 
     public func item(id: String) -> LibraryItem? { items.first { $0.id == id } }
     public func index(of item: LibraryItem) -> Int? { items.firstIndex { $0.id == item.id } }
+
+    /// This series' counterpart of an item from another series — One Piece's
+    /// Ch. 43 for One Piece (Colored)'s Ch. 43. By chapter when the item has
+    /// one, otherwise by volume. Chapter numbers can restart in every arc, so
+    /// among several with the number, one in the same volume wins, then one
+    /// in an arc of the same name, then the first.
+    public func matchingItem(for item: LibraryItem) -> LibraryItem? {
+        if let chapter = item.chapter {
+            let candidates = items.filter { $0.chapter == chapter }
+            if let volume = item.volume, let sameVolume = candidates.first(where: { $0.volume == volume }) {
+                return sameVolume
+            }
+            if let arc = item.arc, let sameArc = candidates.first(where: { $0.arc == arc }) {
+                return sameArc
+            }
+            return candidates.first
+        }
+        if let volume = item.volume {
+            return items.first { $0.volume == volume && $0.chapter == nil } ?? items.first { $0.volume == volume }
+        }
+        return nil
+    }
 }
 
 // MARK: - Codable

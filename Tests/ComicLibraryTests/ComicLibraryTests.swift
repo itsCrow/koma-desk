@@ -211,4 +211,33 @@ struct RemoteSourceTests {
         #expect(index.series(named: "Remote Manga")?.items.first?.id == remoteItem.id)
         #expect(index.item(id: remoteItem.id) == remoteItem)
     }
+
+    @Test("Another series' counterpart: by chapter, preferring the same volume or arc, else by volume")
+    func matchingItem() {
+        func item(_ series: String, volume: Int? = nil, chapter: Int? = nil, arc: String? = nil) -> LibraryItem {
+            let name = "\(series) \(volume.map { "v\($0)" } ?? "") \(chapter.map { "c\($0)" } ?? "") \(arc ?? "")"
+            return LibraryItem(url: URL(fileURLWithPath: "/tmp/\(name).cbz"), series: series,
+                               volume: volume, chapter: chapter, title: name, arc: arc, fileSize: 1)
+        }
+        let colored = Series(name: "One Piece (Colored)", items: [
+            item("One Piece (Colored)", volume: 2),
+            item("One Piece (Colored)", volume: 5, chapter: 43),
+            item("One Piece (Colored)", chapter: 3, arc: "Second"),
+        ])
+        let plain = Series(name: "One Piece", items: [
+            item("One Piece", volume: 1),
+            item("One Piece", volume: 2),
+            item("One Piece", volume: 4, chapter: 43),
+            item("One Piece", volume: 5, chapter: 43),
+            item("One Piece", chapter: 3, arc: "First"),
+            item("One Piece", chapter: 3, arc: "Second"),
+        ])
+
+        #expect(plain.matchingItem(for: colored.items[0])?.id == plain.items[1].id)
+        #expect(plain.matchingItem(for: colored.items[1])?.id == plain.items[3].id)
+        #expect(plain.matchingItem(for: colored.items[2])?.id == plain.items[5].id)
+        #expect(plain.matchingItem(for: item("X", chapter: 999)) == nil)
+        #expect(plain.matchingItem(for: item("X", volume: 9)) == nil)
+        #expect(plain.matchingItem(for: item("X")) == nil)
+    }
 }

@@ -150,6 +150,74 @@ struct ReaderProjectTests {
         #expect(project.manifest.label(for: span).series == "Vinland Saga")
     }
 
+    @Test("Series to switch to: the project's in its order, then the rest of the library, never the one open")
+    func switchableSeries() throws {
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+        let folder = scratch.root.appendingPathComponent("Comics", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for name in ["Berserk v01.cbz", "One Piece v01.cbz", "One Piece Colored v01.cbz", "Vagabond v01.cbz"] {
+            try Data(repeating: 0, count: 10).write(to: folder.appendingPathComponent(name))
+        }
+        scratch.library.addRoot(folder)
+        #expect(scratch.library.series.count == 4)
+
+        model.newProject(named: "Straw Hats", series: ["One Piece Colored", "One Piece", "Monster"])
+        // The project brings up its first series, so that one's left out.
+        #expect(model.series?.name == "One Piece Colored")
+        let switchable = model.switchableSeries
+        #expect(switchable.inProject.map(\.name) == ["One Piece"])
+        #expect(switchable.others.map(\.name) == ["Berserk", "Vagabond"])
+        #expect(model.canSwitchToNextProjectSeries)
+    }
+
+    @Test("Switching series lands on the same volume and page, or where the other series was left")
+    func switchSeriesKeepsPlace() async throws {
+        guard let path = Self.comicPath else {
+            withKnownIssue("Set PANELS_TEST_CBR to run.") { Issue.record("skipped") }
+            return
+        }
+        let scratch = try Scratch()
+        defer { scratch.tearDown() }
+        let model = scratch.model
+        let source = URL(fileURLWithPath: path)
+        let folder = scratch.root.appendingPathComponent("Comics", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let ext = source.pathExtension
+        for name in ["Alpha v01", "Beta v01", "Gamma v02"] {
+            try FileManager.default.copyItem(at: source, to: folder.appendingPathComponent("\(name).\(ext)"))
+        }
+        scratch.library.addRoot(folder)
+        let alpha = try #require(scratch.library.series(named: "Alpha"))
+        let beta = try #require(scratch.library.series(named: "Beta"))
+        let gamma = try #require(scratch.library.series(named: "Gamma"))
+
+        model.read(alpha)
+        #expect(await Self.wait { !model.isLoading && model.hasComic })
+        model.newProject(named: "Pair", series: ["Alpha", "Beta"])
+        model.goTo(spread: 6)
+        let page = model.currentPageNumber
+        #expect(page > 1)
+
+        model.switchSeries(to: beta)
+        #expect(await Self.wait { !model.isLoading && model.hasComic && model.series?.name == "Beta" })
+        #expect(model.item?.id == beta.items[0].id)
+        #expect(model.currentPageNumber == page)
+        #expect(model.lastCaptureMessage == "Vol. 1 in Beta")
+
+        // Two series in the project: the next one is the other, both ways.
+        model.switchToNextProjectSeries()
+        #expect(await Self.wait { !model.isLoading && model.hasComic && model.series?.name == "Alpha" })
+        #expect(model.currentPageNumber == page)
+
+        // No Vol. 1 in Gamma: it opens where it was left, at the start.
+        model.switchSeries(to: gamma)
+        #expect(await Self.wait { !model.isLoading && model.hasComic && model.series?.name == "Gamma" })
+        #expect(model.spreadIndex == 0)
+        #expect(model.lastCaptureMessage == "No Vol. 1 in Gamma, opened where you left it")
+    }
+
     // MARK: - Reading through the library
 
     @Test("A comic file joins the library as a series of one and opens where it was left")

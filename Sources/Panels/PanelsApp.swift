@@ -162,6 +162,15 @@ struct PanelsApp: App {
                 Divider()
                 Button("Back to Series") { model.showSeriesPage() }
                     .disabled(model.series == nil)
+                Divider()
+                Button("Next Series in Project") { model.switchToNextProjectSeries() }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+                    .disabled(!model.canSwitchToNextProjectSeries)
+                let switchable = model.switchableSeries
+                Menu("Switch Series") {
+                    SwitchSeriesItems(model: model, switchable: switchable)
+                }
+                .disabled(switchable.inProject.isEmpty && switchable.others.isEmpty)
             }
 
             CommandGroup(after: .toolbar) {
